@@ -204,3 +204,77 @@ describe("generate_prompts", function()
     assert.are.same(1, instruction_message_count2)
   end)
 end)
+
+describe("agentic completion reminder", function()
+  local Config = require("avante.config")
+  local Providers = require("avante.providers")
+  local original_curl
+  local original_mode
+  local original_provider
+
+  --- Drive M._stream with a provider that always completes without tool use,
+  --- and count how many requests one user message costs.
+  ---@param tools AvanteLLMTool[] | nil
+  ---@return integer requests
+  local function count_requests(tools)
+    local requests = 0
+    llm.curl = function(curl_opts)
+      requests = requests + 1
+      -- Claude Code resolves its own tools, so Avante only ever sees "complete".
+      vim.schedule(function() curl_opts.handler_opts.on_stop({ reason = "complete" }) end)
+    end
+
+    local history_messages = {}
+    local done = false
+    llm._stream({
+      ask = true,
+      code_lang = "lua",
+      instructions = "hi",
+      mode = "agentic",
+      provider = Providers[Config.provider],
+      tools = tools,
+      history_messages = history_messages,
+      get_history_messages = function() return history_messages end,
+      on_messages_add = function(msgs)
+        for _, msg in ipairs(msgs) do
+          table.insert(history_messages, msg)
+        end
+      end,
+      on_chunk = function() end,
+      on_stop = function() done = true end,
+    })
+    vim.wait(2000, function() return done end, 5)
+    return requests
+  end
+
+  before_each(function()
+    original_curl = llm.curl
+    original_mode = Config.mode
+    original_provider = Config.provider
+    Config.mode = "agentic"
+  end)
+
+  after_each(function()
+    llm.curl = original_curl
+    Config.mode = original_mode
+    Config.provider = original_provider
+  end)
+
+  it("does not nag for tool calls when the request carried no tools", function()
+    -- Regression: the reminder told the model to call attempt_completion, which
+    -- is impossible with no tools, so every message cost four full turns.
+    assert.are.same(1, count_requests(nil))
+  end)
+
+  it("still nags when tools were offered", function()
+    local tools = {
+      {
+        name = "attempt_completion",
+        description = "Signal the task is done",
+        param = { type = "table", fields = {} },
+        returns = {},
+      },
+    }
+    assert.is_true(count_requests(tools) > 1)
+  end)
+end)

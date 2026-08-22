@@ -109,6 +109,14 @@ runner, or every tool would run twice. The translator rewrites them into text:
   ⎿ 1  fn main() {
 ```
 
+**Consequence.** The agentic loop's completion reminder had to be narrowed. When
+a turn ends without `attempt_completion`, `llm.lua` injects a hidden
+`<system-reminder>` telling the model to call a tool, and re-runs the turn — up
+to three times. With no tools in the request that tool can never be called, so
+every message cost four full Claude Code turns and sent three instructions the
+model could not act on. The reminder is now conditional on tools actually having
+been offered, which leaves tool-using providers untouched.
+
 **Consequence.** Claude Code edits files on disk directly, so avante's diff-review
 flow does not sit in front of those edits. `permission_mode` (default
 `acceptEdits`) is the control users have. This is the same bargain the ACP
