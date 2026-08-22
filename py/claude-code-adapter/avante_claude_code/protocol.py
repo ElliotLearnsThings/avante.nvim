@@ -25,6 +25,10 @@ SESSION_EVENT = "avante_session"
 #: they are informational, so they travel under a private event name.
 TOOL_ACTIVITY_EVENT = "avante_tool_activity"
 
+#: Emitted when Claude Code calls one of Avante's tools. Neovim runs the real
+#: Lua tool and answers on stdin with a matching ``tool_result``.
+TOOL_CALL_EVENT = "avante_tool_call"
+
 #: Emitted once per turn with what this Claude Code session actually has:
 #: its slash commands, skills, plugins, MCP servers, tools and auth source.
 CAPABILITIES_EVENT = "avante_capabilities"
@@ -50,6 +54,11 @@ class AdapterRequest:
     add_dirs: list[str] = field(default_factory=list)
     mcp_config: list[str] = field(default_factory=list)
     strict_mcp_config: bool = False
+    #: Avante's own tools, already in MCP `inputSchema` form. When present they
+    #: are served to Claude Code over an MCP bridge and executed inside Neovim.
+    avante_tools: list[dict[str, Any]] = field(default_factory=list)
+    #: "avante" (only Avante's tools), "native" (only Claude Code's), or "both".
+    tools_mode: str = "native"
     plugin_dirs: list[str] = field(default_factory=list)
     plugin_urls: list[str] = field(default_factory=list)
     disable_slash_commands: bool = False

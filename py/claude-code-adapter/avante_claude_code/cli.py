@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -26,7 +27,30 @@ def _append(args: list[str], flag: str, value: str | None) -> None:
         args.extend((flag, value))
 
 
-def build_args(request: AdapterRequest) -> list[str]:
+#: Claude Code namespaces MCP tools as `mcp__<server>__<tool>`.
+MCP_SERVER_NAME = "avante"
+
+
+def mcp_tool_names(request: AdapterRequest) -> list[str]:
+    """Return the fully-qualified names Claude Code will know Avante's tools by."""
+    return [f"mcp__{MCP_SERVER_NAME}__{tool['name']}" for tool in request.avante_tools if tool.get("name")]
+
+
+def mcp_config(socket_path: str, python_path: str) -> str:
+    """Build the `--mcp-config` payload that points Claude Code at our bridge."""
+    return json.dumps(
+        {
+            "mcpServers": {
+                MCP_SERVER_NAME: {
+                    "command": python_path,
+                    "args": ["-m", "avante_claude_code.mcp_server", "--socket", socket_path],
+                },
+            },
+        },
+    )
+
+
+def build_args(request: AdapterRequest, *, bridge_socket: str | None = None) -> list[str]:
     """Return the full argv (including the executable) for one turn."""
     args = [request.cli_path, *BASE_ARGS]
 
@@ -52,6 +76,7 @@ def build_args(request: AdapterRequest) -> list[str]:
 
     _append_tool_args(args, request)
     _append_extension_args(args, request)
+    _append_bridge_args(args, request, bridge_socket)
 
     if request.max_budget_usd is not None:
         args.extend(("--max-budget-usd", str(request.max_budget_usd)))
@@ -157,3 +182,17 @@ def build_stdin_messages(request: AdapterRequest) -> list[dict[str, Any]]:
     if not prompt.strip():
         return []
     return [{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": prompt}]}}]
+
+
+def _append_bridge_args(args: list[str], request: AdapterRequest, socket_path: str | None) -> None:
+    """Wire in the MCP bridge that lets Claude Code call Avante's own tools."""
+    if not socket_path or not request.avante_tools:
+        return
+    args.extend(("--mcp-config", mcp_config(socket_path, sys.executable)))
+    # Bridged tools need naming explicitly; a permission prompt has nowhere to
+    # go in a non-interactive turn, so an un-allowed tool is simply refused.
+    for name in mcp_tool_names(request):
+        args.extend(("--allowed-tools", name))
+    if request.tools_mode == "avante" and request.tools is None:
+        # Avante's tools replace Claude Code's rather than joining them.
+        args.extend(("--tools", ""))

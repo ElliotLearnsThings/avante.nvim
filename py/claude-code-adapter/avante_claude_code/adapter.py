@@ -11,9 +11,10 @@ import sys
 import threading
 from typing import IO, Any
 
+from .bridge import ToolBridge
 from .cli import build_args, build_env, build_stdin_messages
 from .probe import probe
-from .protocol import AdapterRequest, SSEWriter
+from .protocol import TOOL_CALL_EVENT, AdapterRequest, SSEWriter
 from .translator import StreamTranslator
 
 #: Tail of the CLI's stderr kept around to explain a non-zero exit.
@@ -51,9 +52,20 @@ def run(request: AdapterRequest, writer: SSEWriter | None = None) -> int:
     writer = writer if writer is not None else SSEWriter()
     translator = StreamTranslator(writer, emit_tool_activity=request.emit_tool_activity)
 
+    bridge: ToolBridge | None = None
+    if request.avante_tools:
+        # Avante's tools live in Neovim, so Claude Code reaches them through an
+        # MCP server that proxies back across this socket.
+        bridge = ToolBridge(
+            request.avante_tools,
+            lambda call: writer.emit({"type": TOOL_CALL_EVENT, **call}, name=TOOL_CALL_EVENT),
+        )
+        bridge.start()
+        threading.Thread(target=_read_tool_results, args=(bridge,), daemon=True).start()
+
     try:
         process = subprocess.Popen(
-            build_args(request),
+            build_args(request, bridge_socket=bridge.path if bridge else None),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -95,6 +107,8 @@ def run(request: AdapterRequest, writer: SSEWriter | None = None) -> int:
         code = process.wait()
         if stderr_pump is not None:
             stderr_pump.join(timeout=1)
+        if bridge is not None:
+            bridge.close()
 
     if code != 0 and not translator.finished:
         detail = "\n".join(stderr_tail).strip() or f"Claude Code CLI exited with status {code}"
@@ -146,7 +160,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if "--probe" in argv:
         return _probe(argv)
-    raw = sys.stdin.read()
+    # Only the first line is the request. Neovim keeps the pipe open so it can
+    # answer tool calls on the same channel while the turn runs.
+    raw = sys.stdin.readline()
     writer = SSEWriter()
     if not raw.strip():
         writer.error("no request received on stdin", kind="empty_request")
@@ -170,3 +186,17 @@ def _probe(argv: list[str]) -> int:
     sys.stdout.write("\n")
     sys.stdout.flush()
     return 0
+
+
+def _read_tool_results(bridge: ToolBridge) -> None:
+    """Feed Neovim's tool results back to whichever call is waiting."""
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(message, dict) and message.get("type") == "tool_result":
+            bridge.resolve(str(message.get("id")), message)

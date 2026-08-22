@@ -29,6 +29,11 @@ TOOL_RESULT_PREVIEW_CHARS = 500
 #: Longest tool-argument hint shown next to a tool name.
 TOOL_HINT_CHARS = 120
 
+#: Prefix Claude Code gives tools bridged from Avante. Neovim renders those
+#: itself, with its own diff review and confirmations, so echoing them here
+#: would show every call twice.
+BRIDGED_TOOL_PREFIX = "mcp__avante__"
+
 #: Fields of the CLI's `init` record that describe what this session can do.
 #: They are forwarded so Neovim can offer the same slash commands, skills and
 #: plugins the CLI itself would.
@@ -95,6 +100,8 @@ class StreamTranslator:
         self._index_map: dict[int, int] = {}
         # CLI block index -> accumulated partial JSON, for tool_use blocks.
         self._tool_blocks: dict[int, dict[str, Any]] = {}
+        # tool_use ids that Avante is rendering itself.
+        self._bridged_tool_ids: set[str] = set()
         self._usage: dict[str, int] = dict.fromkeys(_USAGE_KEYS, 0)
         self._stop_reason = "end_turn"
 
@@ -173,7 +180,10 @@ class StreamTranslator:
         if block.get("type") == "tool_use":
             # Swallowed: Claude Code executes this itself. We buffer it and
             # replay it as text once the arguments have finished streaming.
-            self._tool_blocks[source_index] = {"name": block.get("name", "tool"), "json": ""}
+            name = str(block.get("name") or "tool")
+            self._tool_blocks[source_index] = {"name": name, "json": "", "id": block.get("id")}
+            if name.startswith(BRIDGED_TOOL_PREFIX) and block.get("id"):
+                self._bridged_tool_ids.add(str(block["id"]))
             return
         index = self._claim_index(source_index)
         self._writer.emit({"type": "content_block_start", "index": index, "content_block": block})
@@ -210,6 +220,8 @@ class StreamTranslator:
 
     def _emit_tool_call(self, pending: dict[str, Any]) -> None:
         if not self._emit_tool_activity:
+            return
+        if str(pending["name"]).startswith(BRIDGED_TOOL_PREFIX):
             return
         try:
             tool_input = json.loads(pending["json"]) if pending["json"] else {}
@@ -267,6 +279,8 @@ class StreamTranslator:
             return
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            if str(block.get("tool_use_id")) in self._bridged_tool_ids:
                 continue
             body = block.get("content")
             if isinstance(body, list):

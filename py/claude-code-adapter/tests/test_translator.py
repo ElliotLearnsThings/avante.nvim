@@ -220,3 +220,60 @@ def test_streamed_message_is_not_replayed_twice() -> None:
     )
     text = "".join(e["delta"].get("text", "") for e in events if e["type"] == "content_block_delta")
     assert text == "hi"
+
+
+def test_bridged_avante_tools_are_not_echoed_as_text() -> None:
+    """Neovim renders its own tools, so echoing them here would double them."""
+    events = drive(
+        [
+            stream({"type": "message_start", "message": {"id": "m", "role": "assistant", "content": []}}),
+            stream(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": "t9", "name": "mcp__avante__view", "input": {}},
+                },
+            ),
+            stream(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"path": "a.lua"}'},
+                },
+            ),
+            stream({"type": "content_block_stop", "index": 0}),
+            {
+                "type": "user",
+                "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t9", "content": "ok"}]},
+            },
+            {"type": "result", "is_error": False, "stop_reason": "end_turn"},
+        ],
+    )
+    text = "".join(e["delta"].get("text", "") for e in events if e["type"] == "content_block_delta")
+    assert text == ""
+
+
+def test_claude_codes_own_tools_are_still_echoed() -> None:
+    events = drive(
+        [
+            stream({"type": "message_start", "message": {"id": "m", "role": "assistant", "content": []}}),
+            stream(
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
+                },
+            ),
+            stream(
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"file_path": "a.txt"}'},
+                },
+            ),
+            stream({"type": "content_block_stop", "index": 0}),
+            {"type": "result", "is_error": False, "stop_reason": "end_turn"},
+        ],
+    )
+    text = "".join(e["delta"].get("text", "") for e in events if e["type"] == "content_block_delta")
+    assert "Read(a.txt)" in text
