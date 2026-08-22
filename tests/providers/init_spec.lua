@@ -12,17 +12,17 @@ describe("providers", function()
     Config = require("avante.config")
     Config.get_last_used_model = function() end
     Config.setup({
-      provider = "test_openai",
+      provider = "test_http",
       providers = {
-        test_openai = {
+        test_http = {
           api_key_name = "",
-          model = "gpt-test",
+          model = "http-test-model",
           parse_curl_args = function() end,
           setup = function() end,
         },
-        test_claude = {
+        test_alt = {
           api_key_name = "",
-          model = "claude-test",
+          model = "alt-test-model",
           parse_curl_args = function() end,
           setup = function() end,
         },
@@ -53,9 +53,9 @@ describe("providers", function()
       end,
     }
 
-    require("avante.providers").refresh("test_claude")
+    require("avante.providers").refresh("test_alt")
 
-    assert.are.same("test_claude", Config.provider)
+    assert.are.same("test_alt", Config.provider)
     assert.are.same(1, rendered)
   end)
 end)

@@ -54,3 +54,6 @@ config.personal.lua
 /lua/.tag
 target
 /result
+
+# Test dependencies cloned by scripts/setup-deps.sh
+/deps/

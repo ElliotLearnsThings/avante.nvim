@@ -21,18 +21,17 @@ describe("generate_prompts", function()
     -- Mock Config.providers
     local Config = require("avante.config")
     Config.instructions_file = "avante.md"
-    Config.provider = "openai"
+    Config.provider = "claude_code"
     Config.acp_providers = {}
     Config.providers = {
-      openai = {
-        endpoint = "https://api.mock.com/v1",
-        model = "gpt-mock",
-        timeout = 10000,
+      claude_code = {
+        model = "sonnet",
+        cli_path = "claude",
+        permission_mode = "acceptEdits",
+        timeout = 0,
         context_window = 1000,
-        extra_request_body = {
-          temperature = 0.5,
-          max_tokens = 1000,
-        },
+        disable_tools = true,
+        extra_request_body = {},
       },
     }
     -- Mock Config.history to prevent nil access error in Path.setup()

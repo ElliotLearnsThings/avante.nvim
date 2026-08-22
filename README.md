@@ -38,7 +38,7 @@ If you like this project, please consider supporting me on Patreon, as it helps 
 
 ## Avante Zen Mode
 
-It is possible to launch avante such that it looks like a typical Vibe Coding Agent CLI but while being completely Neovim underneath. So you can use your muscle-memory Vim operations and those rich and mature Neovim plugins on it. At the same time, by leveraging [ACP](https://github.com/yetone/avante.nvim#acp-support) it has all capabilities of claude code / gemini-cli / codex! Why not enjoy both?
+It is possible to launch avante such that it looks like a typical Vibe Coding Agent CLI but while being completely Neovim underneath. So you can use your muscle-memory Vim operations and those rich and mature Neovim plugins on it. At the same time, because avante drives the [native Claude Code CLI](#provider), it has every capability Claude Code itself has! Why not enjoy both?
 
 Now all you need to do is install [./contrib/avante] in your PATH (or create the equivalent alias); then every time you simply type avante just like using claude code and enter Avante’s Zen Mode!
 
@@ -139,6 +139,12 @@ myapp is a modern e-commerce platform targeting small businesses. we prioritize 
 
 For building binary if you wish to build from source, then `cargo` is required. Otherwise `curl` and `tar` will be used to get prebuilt binary from GitHub.
 
+> [!IMPORTANT]
+>
+> avante drives the native [Claude Code CLI](#provider). Install it from
+> <https://claude.com/claude-code>, sign in once with `claude auth`, and make
+> sure Python 3.9 or newer is on your `$PATH`. There is no API key to configure.
+
 <details open>
 
   <summary><a href="https://github.com/folke/lazy.nvim">lazy.nvim</a> (recommended)</summary>
@@ -159,26 +165,12 @@ For building binary if you wish to build from source, then `cargo` is required. 
     -- add any opts here
     -- this file can contain specific instructions for your project
     instructions_file = "avante.md",
-    -- for example
-    provider = "claude",
+    -- avante drives the Claude Code CLI; see the Provider section below
+    provider = "claude_code",
     providers = {
-      claude = {
-        endpoint = "https://api.anthropic.com",
-        model = "claude-sonnet-4-20250514",
-        timeout = 30000, -- Timeout in milliseconds
-          extra_request_body = {
-            temperature = 0.75,
-            max_tokens = 20480,
-          },
-      },
-      moonshot = {
-        endpoint = "https://api.moonshot.ai/v1",
-        model = "kimi-k2-0711-preview",
-        timeout = 30000, -- Timeout in milliseconds
-        extra_request_body = {
-          temperature = 0.75,
-          max_tokens = 32768,
-        },
+      claude_code = {
+        model = "sonnet",
+        permission_mode = "acceptEdits",
       },
     },
   },
@@ -192,7 +184,6 @@ For building binary if you wish to build from source, then `cargo` is required. 
     "ibhagwan/fzf-lua", -- for file_selector provider fzf
     "folke/snacks.nvim", -- for input provider snacks
     "nvim-tree/nvim-web-devicons", -- or echasnovski/mini.icons
-    "zbirenbaum/copilot.lua", -- for providers='copilot'
     {
       -- support for image pasting
       "HakonHarnes/img-clip.nvim",
@@ -259,7 +250,6 @@ vim.pack.add({
   'https://github.com/hrsh7th/nvim-cmp',
   'https://github.com/nvim-tree/nvim-web-devicons', -- or 'echasnovski/mini.icons'
   'https://github.com/HakonHarnes/img-clip.nvim',
-  'https://github.com/zbirenbaum/copilot.lua',
   'https://github.com/folke/snacks.nvim', -- for modern input UI
 })
 
@@ -298,7 +288,6 @@ Plug 'MeanderingProgrammer/render-markdown.nvim'
 Plug 'hrsh7th/nvim-cmp'
 Plug 'nvim-tree/nvim-web-devicons' "or Plug 'echasnovski/mini.icons'
 Plug 'HakonHarnes/img-clip.nvim'
-Plug 'zbirenbaum/copilot.lua'
 Plug 'folke/snacks.nvim' " for modern input UI
 
 " Yay, pass source=true if you want to build from source
@@ -333,14 +322,12 @@ add({
 })
 --- optional
 add({ source = 'hrsh7th/nvim-cmp' })
-add({ source = 'zbirenbaum/copilot.lua' })
 add({ source = 'HakonHarnes/img-clip.nvim' })
 add({ source = 'MeanderingProgrammer/render-markdown.nvim' })
 
 later(function() require('render-markdown').setup({...}) end)
 later(function()
   require('img-clip').setup({...}) -- config img-clip
-  require("copilot").setup({...}) -- setup copilot to your liking
   require("avante").setup({...}) -- config for avante.nvim
 end)
 ```
@@ -392,9 +379,6 @@ require('cmp').setup ({
 require('img-clip').setup ({
   -- use recommended settings from above
 })
-require('copilot').setup ({
-  -- use recommended settings from above
-})
 require('render-markdown').setup ({
   -- use recommended settings from above
 })
@@ -406,7 +390,7 @@ require('avante').setup({
       -- Snacks input configuration
       title = "Avante Input",
       icon = " ",
-      placeholder = "Enter your API key...",
+      placeholder = "Ask Claude Code anything...",
     },
   },
   -- Your other config here!
@@ -444,7 +428,7 @@ You can pass options directly to `setup()`:
 
 ```lua
 require("avante").setup({
-  provider = "claude",
+  provider = "claude_code",
   behaviour = {
     auto_suggestions = false,
   },
@@ -455,7 +439,7 @@ Alternatively, define the same options in `vim.g.avante` before calling `setup()
 
 ```lua
 vim.g.avante = {
-  provider = "claude",
+  provider = "claude_code",
   behaviour = {
     auto_suggestions = false,
   },
@@ -471,31 +455,54 @@ If both are used, options passed to `setup()` override values from `vim.g.avante
 
 ```lua
 {
-  ---@alias Provider "claude" | "openai" | "azure" | "gemini" | "cohere" | "copilot" | string
-  ---@type Provider
-  provider = "claude", -- The provider used in Aider mode or in the planning phase of Cursor Planning Mode
+  ---@type avante.ProviderName
+  provider = "claude_code", -- The only built-in provider: the native Claude Code CLI
   ---@alias Mode "agentic" | "legacy"
   ---@type Mode
   mode = "agentic", -- The default mode for interaction. "agentic" uses tools to automatically generate code, "legacy" uses the old planning method to generate code.
-  -- WARNING: Since auto-suggestions are a high-frequency operation and therefore expensive,
-  -- currently designating it as `copilot` provider is dangerous because: https://github.com/yetone/avante.nvim/issues/1048
-  -- Of course, you can reduce the request frequency by increasing `suggestion.debounce`.
-  auto_suggestions_provider = "claude",
+  -- Agent Client Protocol agents are opt-in. The native Claude Code provider supersedes
+  -- the old `claude-code` ACP entry, so no agent is configured out of the box.
+  acp_providers = {},
   providers = {
-    claude = {
-      endpoint = "https://api.anthropic.com",
-      auth_type = "api" -- Set to "max" to sign in with Claude Pro/Max subscription
-      model = "claude-3-5-sonnet-20241022",
-      extra_request_body = {
-        temperature = 0.75,
-        max_tokens = 4096,
-      },
+    --- The native Claude Code CLI, driven through the Python adapter in
+    --- `py/claude-code-adapter`. See the "Provider" section below.
+    claude_code = {
+      display_name = "Claude Code",
+      model = "sonnet", -- A model alias ("opus", "sonnet", "haiku") or a full model name
+      model_names = { "opus", "sonnet", "haiku" }, -- Offered by `:AvanteModels`
+      cli_path = "claude", -- The `claude` executable. A bare name is looked up on $PATH
+      python_path = nil, -- Python 3.9+ interpreter for the adapter. Auto-detected when nil
+      -- How freely Claude Code may act:
+      -- "acceptEdits" | "plan" | "bypassPermissions" | "manual" | "dontAsk" | "auto"
+      permission_mode = "acceptEdits",
+      -- Built-in tools Claude Code may use. nil keeps its default set, an empty table disables all of them
+      tools = nil,
+      allowed_tools = nil,
+      disallowed_tools = nil,
+      add_dirs = {}, -- Extra directories Claude Code is allowed to touch
+      mcp_config = {}, -- MCP server config files or JSON strings
+      strict_mcp_config = false, -- Ignore every MCP server that is not listed in `mcp_config`
+      settings = nil, -- Settings file path or JSON string
+      setting_sources = nil, -- Which setting sources to load
+      agents = nil, -- Custom agent definitions, as a JSON string
+      effort = nil, -- Reasoning effort: "low" | "medium" | "high" | "xhigh" | "max"
+      fallback_model = nil, -- Model to fall back to when the primary one is overloaded
+      max_budget_usd = nil, -- Spend ceiling for a single turn, in US dollars
+      cwd = nil, -- Directory Claude Code runs in. Defaults to the project root
+      -- Resume the Claude Code session between turns instead of replaying the whole transcript
+      stateful = true,
+      emit_tool_activity = true, -- Show Claude Code's own tool calls and results in the sidebar
+      extra_args = {}, -- Arguments appended verbatim to the CLI invocation
+      env = {}, -- Extra environment variables for the CLI
+      timeout = 0, -- Abort the turn after this many seconds. 0 disables the timeout
+      context_window = 200000,
+      disable_tools = true, -- Claude Code brings its own tools, Avante's would duplicate them
     },
   },
   ---Specify the special dual_boost mode
   ---1. enabled: Whether to enable dual_boost mode. Default to false.
-  ---2. first_provider: The first provider to generate response. Default to "openai".
-  ---3. second_provider: The second provider to generate response. Default to "claude".
+  ---2. first_provider: The first provider to generate response. Default to "claude_code".
+  ---3. second_provider: The second provider to generate response. Default to "claude_code".
   ---4. prompt: The prompt to generate response based on the two reference outputs.
   ---5. timeout: Timeout in milliseconds. Default to 60000.
   ---How it works:
@@ -503,8 +510,8 @@ If both are used, options passed to `setup()` override values from `vim.g.avante
   ---Note: This is an experimental feature and may not work as expected.
   dual_boost = {
     enabled = false,
-    first_provider = "openai",
-    second_provider = "claude",
+    first_provider = "claude_code",
+    second_provider = "claude_code",
     prompt = "Based on the two reference outputs below, generate a response that incorporates elements from both but reflects your own judgment and unique perspective. Do not provide any explanation, just give the response directly. Reference Output 1: [{{provider1_output}}], Reference Output 2: [{{provider2_output}}]",
     timeout = 60000, -- Timeout in milliseconds
   },
@@ -643,6 +650,119 @@ If both are used, options passed to `setup()` override values from `vim.g.avante
 
 </details>
 
+## Provider
+
+Avante has exactly one built-in provider: `claude_code`. Rather than talking to
+an HTTP API, it drives the **native Claude Code CLI** through a small Python
+adapter that ships with the plugin (`py/claude-code-adapter`). The adapter runs
+`claude --print --output-format stream-json`, merges the CLI's agentic loop into
+a single assistant message and re-emits it as Anthropic Messages API events, so
+the sidebar, chat history and token accounting behave exactly as they always
+did.
+
+### Setup
+
+1. **Install the Claude Code CLI** from <https://claude.com/claude-code>, then
+   sign in once with `claude auth`. Authentication belongs entirely to the CLI:
+   avante never reads or prompts for an API key, and there is no
+   `ANTHROPIC_API_KEY` to export. Whatever `claude` works with in your terminal
+   is what avante uses. If the binary is not on your `$PATH`, point `cli_path`
+   at it.
+2. **Make sure Python 3.9 or newer is on your `$PATH`.** The bundled adapter is
+   written against the standard library only — there is nothing to
+   `pip install` and no virtualenv to create. Set `python_path` if your
+   interpreter is not discoverable as `python3` or `python`.
+
+That is the whole setup. `require("avante").setup({})` with no options at all
+already talks to Claude Code:
+
+```lua
+require("avante").setup({
+  provider = "claude_code",
+  providers = {
+    claude_code = {
+      model = "sonnet",
+      permission_mode = "acceptEdits",
+    },
+  },
+})
+```
+
+### Claude Code runs its own tools
+
+This is the one behavioural difference worth internalising. Claude Code owns a
+complete agentic loop: it reads, greps, runs commands and **writes files on disk
+directly**, and only returns to avante once the whole turn is finished. Two
+consequences follow:
+
+- Avante's own tool runner is disabled for this provider (`disable_tools = true`
+  by default), so a tool is never executed twice. Claude Code's tool calls are
+  rendered inline in the sidebar as activity, not replayed as avante tools.
+- Avante's diff review does not sit in front of Claude Code's edits, because the
+  edits have already happened by the time the response arrives. Use `git` — or
+  `permission_mode` — as your safety net.
+
+### Permission modes
+
+`permission_mode` is therefore the control that matters. It is passed straight
+through to `claude --permission-mode`, so the CLI's own documentation is
+authoritative, but in short:
+
+| Value               | Behaviour                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------- |
+| `acceptEdits`       | **The default.** File edits are applied as they are made, without asking.              |
+| `plan`              | Planning only: Claude Code investigates and proposes changes instead of making them.   |
+| `bypassPermissions` | Every permission check is skipped. Fast, and the most dangerous — use it in throwaway or sandboxed trees. |
+| `manual`            | Nothing is pre-approved; each action has to be permitted explicitly.                   |
+| `dontAsk`           | Claude Code proceeds without raising permission prompts.                               |
+| `auto`              | Claude Code decides how much approval it needs as the turn goes on.                    |
+
+Avante drives the CLI non-interactively, so a mode that would normally stop and
+ask cannot be answered from the sidebar — Claude Code declines the action
+instead of waiting for you. That is why `acceptEdits` is the default. Start with
+`plan` if you want to see what a request would do before anything is written.
+
+### Configuration keys
+
+All of the following live under `providers.claude_code`:
+
+| Key                  | Type                | Description                                                                                             |
+| -------------------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `model`              | `string`            | Model alias (`"opus"`, `"sonnet"`, `"haiku"`) or a full model name. Default `"sonnet"`.                  |
+| `cli_path`           | `string`            | The `claude` executable. A bare name is looked up on `$PATH`; an absolute path is taken as is.           |
+| `python_path`        | `string?`           | Interpreter used to run the adapter. Auto-detected from `python3`/`python` when unset.                   |
+| `permission_mode`    | `string`            | How freely Claude Code may act. See the table above. Default `"acceptEdits"`.                            |
+| `tools`              | `string[]?`         | The built-in tools Claude Code may use. `nil` keeps its default set, `{}` disables all of them.          |
+| `allowed_tools`      | `string[]?`         | Tools to allow explicitly, e.g. `{ "Read", "Grep", "Glob" }` for a read-only session.                    |
+| `disallowed_tools`   | `string[]?`         | Tools to forbid, e.g. `{ "Bash" }`.                                                                     |
+| `add_dirs`           | `string[]`          | Extra directories Claude Code may reach outside `cwd`.                                                   |
+| `mcp_config`         | `string[]`          | MCP server configuration files or JSON strings, one `--mcp-config` each.                                 |
+| `strict_mcp_config`  | `boolean`           | Ignore every MCP server that is not listed in `mcp_config`. Default `false`.                             |
+| `settings`           | `string?`           | A Claude Code settings file path or a JSON string.                                                       |
+| `setting_sources`    | `string?`           | Which setting sources the CLI should load.                                                               |
+| `agents`             | `string?`           | Custom agent definitions, as a JSON string.                                                              |
+| `effort`             | `string?`           | Reasoning effort: `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"`.                                   |
+| `fallback_model`     | `string?`           | Model to fall back to when the primary one is overloaded.                                                |
+| `max_budget_usd`     | `number?`           | Spend ceiling for a single turn, in US dollars.                                                          |
+| `cwd`                | `string?`           | Directory Claude Code runs in — its tools are scoped to it. Defaults to the project root.                |
+| `stateful`           | `boolean`           | Resume the Claude Code session between turns instead of replaying the transcript. Default `true`.        |
+| `emit_tool_activity` | `boolean`           | Show Claude Code's own tool calls and results in the sidebar. Default `true`.                            |
+| `extra_args`         | `string[]`          | Arguments appended verbatim to the CLI invocation — the escape hatch for anything not modelled here.     |
+| `env`                | `table<string,string>` | Extra environment variables for the CLI process.                                                      |
+| `timeout`            | `number`            | Abort the turn after this many seconds. `0` (the default) disables the timeout.                          |
+
+A read-only configuration, for example, looks like this:
+
+```lua
+providers = {
+  claude_code = {
+    model = "opus",
+    permission_mode = "plan",
+    allowed_tools = { "Read", "Grep", "Glob" },
+  },
+}
+```
+
 ## Blink.cmp users
 
 For blink cmp users (nvim-cmp alternative) view below instruction for configuration
@@ -679,7 +799,7 @@ To create a customized selector provider, you can specify a customized function 
 
 ### Input Provider Configuration
 
-Avante.nvim supports multiple input providers for user input (like API key entry). You can configure which provider to use:
+Avante.nvim supports multiple input providers for the prompts it opens (the ask window, rename dialogs, and so on). You can configure which provider to use:
 
 <details>
   <summary>Native Input Provider (Default)</summary>
@@ -858,90 +978,17 @@ Here's a complete blink.cmp configuration example with all Avante sources:
 
 ## Usage
 
-### Using Claude Pro/Max Subscription
-To login with your Claude subscription, set the **auth_type** of the Claude provider entry in your config to "max", re-open Neovim then the authentication process will start in your browser. Once logged in and authorized, a code will show that needs to be copied into the prompt in Neovim, which should then give access to use your subscription with Avante.
-
-You may need to run `AvanteSwitchProvider claude` to initiate the authentication if you previously had a different provider selected.
-
-```lua
--- Providers = { ...
-
-  claude = {
-    -- ...
-    auth_type = "max",
-  },
-
-```
-
 ### Basic Functionality
 
 Given its early stage, `avante.nvim` currently supports the following basic functionalities:
 
 > [!IMPORTANT]
 >
-> For most consistency between neovim session, it is recommended to set the environment variables in your shell file.
-> By default, `Avante` will prompt you at startup to input the API key for the provider you have selected.
->
-> **Scoped API Keys (Recommended for Isolation)**
->
-> Avante now supports scoped API keys, allowing you to isolate API keys specifically for Avante without affecting other applications. Simply prefix any API key with `AVANTE_`:
->
-> ```sh
-> # Scoped keys (recommended)
-> export AVANTE_ANTHROPIC_API_KEY=your-claude-api-key
-> export AVANTE_OPENAI_API_KEY=your-openai-api-key
-> export AVANTE_AZURE_OPENAI_API_KEY=your-azure-api-key
-> export AVANTE_GEMINI_API_KEY=your-gemini-api-key
-> export AVANTE_CO_API_KEY=your-cohere-api-key
-> export AVANTE_AIHUBMIX_API_KEY=your-aihubmix-api-key
-> export AVANTE_MOONSHOT_API_KEY=your-moonshot-api-key
-> ```
->
-> **Global API Keys (Legacy)**
->
-> You can still use the traditional global API keys if you prefer:
->
-> For Claude:
->
-> ```sh
-> export ANTHROPIC_API_KEY=your-api-key
-> ```
->
-> For OpenAI:
->
-> ```sh
-> export OPENAI_API_KEY=your-api-key
-> ```
->
-> For Azure OpenAI:
->
-> ```sh
-> export AZURE_OPENAI_API_KEY=your-api-key
-> ```
->
-> For Amazon Bedrock:
->
-> You can specify the `BEDROCK_KEYS` environment variable to set credentials. When this variable is not specified, bedrock will use the default AWS credentials chain (see below).
->
-> ```sh
-> export BEDROCK_KEYS=aws_access_key_id,aws_secret_access_key,aws_region[,aws_session_token]
-> ```
->
-> Note: The aws_session_token is optional and only needed when using temporary AWS credentials
->
-> Alternatively Bedrock tries to resolve AWS credentials using the [Default Credentials Provider Chain](https://docs.aws.amazon.com/cli/v1/userguide/cli-chap-authentication.html).
-> This means you can have credentials e.g. configured via the AWS CLI, stored in your ~/.aws/profile, use AWS SSO etc.
-> In this case `aws_region` and optionally `aws_profile` should be specified via the bedrock config, e.g.:
->
-> ```lua
-> bedrock = {
->   model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
->   aws_profile = "bedrock",
->   aws_region = "us-east-1",
-> },
-> ```
->
-> Note: Bedrock requires the [AWS CLI](https://aws.amazon.com/cli/) to be installed on your system.
+> There is no API key to configure. Avante drives the Claude Code CLI, which
+> authenticates itself — run `claude auth` once in your terminal and you are
+> done. See [Provider](#provider) for the full setup and for the
+> `permission_mode` setting that governs how freely Claude Code edits your
+> files.
 
 1. Open a code file in Neovim.
 2. Use the `:AvanteAsk` command to query the AI about the code.
@@ -1072,7 +1119,7 @@ return {
 | `:AvanteFocus`                     | Switch focus to/from the sidebar                                                                            |                                                     |
 | `:AvanteRefresh`                   | Refresh all Avante windows                                                                                  |                                                     |
 | `:AvanteStop`                      | Stop the current AI request                                                                                 |                                                     |
-| `:AvanteSwitchProvider`            | Switch AI provider (e.g. openai)                                                                            |                                                     |
+| `:AvanteSwitchProvider`            | Switch AI provider — `claude_code`, or any custom or ACP provider you configured                            | `:AvanteSwitchProvider claude_code`                 |
 | `:AvanteShowRepoMap`               | Show repo map for project's structure                                                                       |                                                     |
 | `:AvanteToggle`                    | Toggle the Avante sidebar                                                                                   |                                                     |
 | `:AvanteModels`                    | Show model list                                                                                             |                                                     |
@@ -1099,102 +1146,35 @@ return {
 
 See [highlights.lua](./lua/avante/highlights.lua) for more information
 
-## Fast Apply
-
-Fast Apply is a feature that enables instant code edits with high accuracy by leveraging specialized models. It replicates Cursor's instant apply functionality, allowing for seamless code modifications without the typical delays associated with traditional code generation.
-
-### Purpose and Benefits
-
-Fast Apply addresses the common pain point of slow code application in AI-assisted development. Instead of waiting for a full language model to process and apply changes, Fast Apply uses a specialized "apply model" that can quickly and accurately merge code edits with 96-98% accuracy at speeds of 2500-4500+ tokens per second.
-
-Key benefits:
-
-- **Instant application**: Code changes are applied immediately without noticeable delays
-- **High accuracy**: Specialized models achieve 96-98% accuracy for code edits
-- **Seamless workflow**: Maintains the natural flow of development without interruptions
-- **Large context support**: Handles up to 16k tokens for both input and output
-
-### Configuration
-
-To enable Fast Apply, you need to:
-
-1. **Enable Fast Apply in your configuration**:
-
-   ```lua
-     behaviour = {
-       enable_fastapply = true,  -- Enable Fast Apply feature
-     },
-     -- ... other configuration
-   ```
-
-2. **Get your Morph API key**:
-   Go to [morphllm.com](https://morphllm.com/api-keys) and create an account and get the API key.
-
-3. **Set your Morph API key**:
-
-   ```bash
-   export MORPH_API_KEY="your-api-key"
-   ```
-
-4. **Change Morph model**:
-   ```lua
-   providers = {
-     morph = {
-       model = "morph-v3-large",
-     },
-   }
-   ```
-
-### Model Options
-
-Morph provides different models optimized for different use cases:
-
-| Model            | Speed             | Accuracy | Context Limit |
-| ---------------- | ----------------- | -------- | ------------- |
-| `morph-v3-fast`  | 4500+ tok/sec     | 96%      | 16k tokens    |
-| `morph-v3-large` | 2500+ tok/sec     | 98%      | 16k tokens    |
-| `auto`           | 2500-4500 tok/sec | 98%      | 16k tokens    |
-
-### How It Works
-
-When Fast Apply is enabled and a Morph provider is configured, avante.nvim will:
-
-1. Use the `edit_file` tool for code modifications instead of traditional tools
-2. Send the original code, edit instructions, and update snippet to the Morph API
-3. Receive the fully merged code back from the specialized apply model
-4. Apply the changes directly to your files with high accuracy
-
-The process uses a specialized prompt format that includes:
-
-- `<instructions>`: Clear description of what changes to make
-- `<code>`: The original code content
-- `<update>`: The specific changes using truncation markers (`// ... existing code ...`)
-
-This approach ensures that the apply model can quickly and accurately merge your changes without the overhead of full code generation.
-
-## Ollama
-
-Ollama is a first-class provider for avante.nvim. To start using it you need to set `provider = "ollama"`
-in the configuration, set the `model` field in `ollama` to the model you want to use. Ollama is disabled
-by default, you need to provide an implementation for its `is_env_set` method to properly enable it.
-For example:
-
-```lua
-provider = "ollama",
-providers = {
-  ollama = {
-    model = "qwq:32b",
-    is_env_set = require("avante.providers.ollama").check_endpoint_alive,
-  },
-}
-```
-
 ## ACP Support
 
 Avante.nvim now supports the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/overview/introduction), enabling seamless integration with AI agents that follow this standardized communication protocol. ACP provides a unified way for AI agents to interact with development environments, offering enhanced capabilities for code editing, file operations, and tool execution.
 
-Avante provides a set of default providers (codex, gemini, claude-code,...), but users can also create their own providers. Providers are configured in the `acp_providers` section of your configuration:
-See `:h avante-acp` and [Custom Providers](https://github.com/yetone/avante.nvim/wiki/Custom-providers) for more information.
+`acp_providers` is empty by default. The native `claude_code` provider
+supersedes the old `claude-code` ACP entry, which wrapped the CLI in the
+third-party `claude-agent-acp` npm shim — the built-in provider talks to the
+`claude` binary directly, so that detour is no longer needed.
+
+You can still configure any ACP agent you like:
+
+```lua
+require("avante").setup({
+  acp_providers = {
+    ["gemini-cli"] = {
+      command = "gemini",
+      args = { "--experimental-acp" },
+      env = {
+        NODE_NO_WARNINGS = "1",
+        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY"),
+      },
+    },
+  },
+})
+```
+
+Select a configured agent with `:AvanteSwitchProvider`. See `:h avante-acp` and
+[Custom Providers](https://github.com/yetone/avante.nvim/wiki/Custom-providers)
+for more information.
 
 ## RAG Service
 
@@ -1279,24 +1259,27 @@ Environment variables required for providers:
 
 ## Disable Tools
 
-Avante enables tools by default, but some LLM models do not support tools. You can disable tools by setting `disable_tools = true` for the provider. For example:
+Avante's own tool runner is **already disabled for `claude_code`**: the CLI
+brings its own Read, Edit, Bash, Grep and friends, and running both sets would
+execute every tool twice. That is what `disable_tools = true` means in the
+default provider configuration. To restrict what Claude Code itself may do, use
+its `tools`, `allowed_tools` and `disallowed_tools` keys — see
+[Provider](#provider).
+
+`disable_tools` is provider-scoped, so a custom provider that cannot handle
+tools can opt out the same way:
 
 ```lua
 providers = {
-  claude = {
-    endpoint = "https://api.anthropic.com",
-    model = "claude-sonnet-4-20250514",
-    timeout = 30000, -- Timeout in milliseconds
+  my_provider = {
+    -- ... the rest of your custom provider
     disable_tools = true, -- disable tools!
-    extra_request_body = {
-      temperature = 0,
-      max_tokens = 4096,
-    }
-  }
+  },
 }
 ```
 
-In case you want to ban some tools to avoid its usage (like Claude 3.7 overusing the python tool) you can disable just specific tools
+If you want to ban individual avante tools for the providers that do use them,
+list them in `disabled_tools`:
 
 ```lua
 {
@@ -1371,7 +1354,6 @@ By default, `avante.nvim` provides three different modes to interact with: `plan
 - `planning`: Used with `require("avante").toggle()` on sidebar
 - `editing`: Used with `require("avante").edit()` on selection codeblock
 - `suggesting`: Used with `require("avante").get_suggestion():suggest()` on Tab flow.
-- `cursor-planning`: Used with `require("avante").toggle()` on Tab flow, but only when cursor planning mode is enabled.
 
 Users can customize the system prompts via `Config.system_prompt` or `Config.override_prompt_dir`.
 

@@ -20,7 +20,7 @@ describe("Input", function()
     local input = Input:new({
       provider = "native",
       title = "Model name",
-      default = "claude",
+      default = "default-model",
       completion = "file",
       on_submit = function(result) submitted = result end,
     })
@@ -29,12 +29,12 @@ describe("Input", function()
 
     assert.are.same({
       prompt = "Model name",
-      default = "claude",
+      default = "default-model",
       completion = "file",
     }, captured_opts)
     assert.is_function(captured_on_submit)
 
-    captured_on_submit("openai")
-    assert.are.same("openai", submitted)
+    captured_on_submit("chosen-model")
+    assert.are.same("chosen-model", submitted)
   end)
 end)

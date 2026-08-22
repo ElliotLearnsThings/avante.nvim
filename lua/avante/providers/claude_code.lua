@@ -16,7 +16,6 @@
 --- Authentication is the CLI's own (`claude auth`); no API key is read.
 ---@brief ]]
 
-local Config = require("avante.config")
 local Utils = require("avante.utils")
 local P = require("avante.providers")
 local HistoryMessage = require("avante.history.message")
