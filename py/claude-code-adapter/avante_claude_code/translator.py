@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .protocol import SESSION_EVENT, SSEWriter
+from .protocol import CAPABILITIES_EVENT, SESSION_EVENT, SSEWriter
 
 #: How much of a tool result is echoed into the transcript.
 TOOL_RESULT_PREVIEW_LINES = 6
@@ -28,6 +28,23 @@ TOOL_RESULT_PREVIEW_CHARS = 500
 
 #: Longest tool-argument hint shown next to a tool name.
 TOOL_HINT_CHARS = 120
+
+#: Fields of the CLI's `init` record that describe what this session can do.
+#: They are forwarded so Neovim can offer the same slash commands, skills and
+#: plugins the CLI itself would.
+_CAPABILITY_KEYS = (
+    "slash_commands",
+    "skills",
+    "agents",
+    "plugins",
+    "tools",
+    "mcp_servers",
+    "model",
+    "permissionMode",
+    "apiKeySource",
+    "claude_code_version",
+    "cwd",
+)
 
 #: Usage counters worth summing across the CLI's internal requests.
 _USAGE_KEYS = (
@@ -110,6 +127,10 @@ class StreamTranslator:
         if isinstance(session_id, str):
             self._session_id = session_id
             self._writer.emit({"type": SESSION_EVENT, "session_id": session_id}, name=SESSION_EVENT)
+        capabilities = {key: record[key] for key in _CAPABILITY_KEYS if key in record}
+        if capabilities:
+            capabilities["type"] = CAPABILITIES_EVENT
+            self._writer.emit(capabilities, name=CAPABILITIES_EVENT)
 
     # -- streamed assistant content ---------------------------------------
 

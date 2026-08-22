@@ -11,8 +11,9 @@ avante.nvim                                                        *avante-nvim*
  - One-command application of suggested changes.
  - Project-specific instruction files with `avante.md`.
  - Agentic mode with tool use.
- - ACP integration for agents such as Gemini CLI, Claude Code, Goose, Codex,
-   and Kimi CLI.
+ - The native Claude Code CLI as its model provider.
+ - ACP integration for other agents such as Gemini CLI, Goose, Codex, and
+   Kimi CLI.
  - Optional RAG service and web-search tools.
 
 
@@ -36,10 +37,7 @@ Custom prompts ································�
 avante utilities ················································ |avante-utils|
 Agent Client Protocol support ····································· |avante-acp|
 Model providers ············································· |avante-providers|
-Bedrock provider ···································· |avante-providers-bedrock|
-Anthropic provider ··································· |avante-providers-claude|
-Ollama provider ······································ |avante-providers-ollama|
-OpenAI provider ······································ |avante-providers-openai|
+Claude Code provider ···························· |avante-providers-claude_code|
 Converts html to markdown ····································· |avante-html2md|
 
 ==============================================================================
@@ -73,7 +71,7 @@ Usage                                                             *avante-usage*
 
                                                                *avante-zen-mode*
 This is an era of Coding Agent CLIs. Allegedly "editors are no longer needed": you only need to use the CLI in the terminal. But have people realized that for more than half a century, Terminal-based Editors have solved and standardized the biggest problem with Terminal-based applications — that is, the awkward TUI interactions! No matter how much these Coding Agent CLIs optimize their UI/UX, their UI/UX will always be a subset of Terminal-based Editors (Vim, Emacs)! They cannot achieve Vim’s elegant action + text objects abstraction (imagine how you usually edit large multi-line prompts in an Agent CLI), nor can they leverage thousands of mature Vim/Neovim plugins to help optimize TUI UI/UX—such as easymotions and so on. Moreover, when they want to view or modify code, they often have to jump into other applications which forcibly interrupts the UI/UX experience.
-Therefore, Avante’s Zen Mode was born! It looks like a Vibe Coding Agent CLI but it is completely Neovim underneath. So you can use your muscle-memory Vim operations and those rich and mature Neovim plugins on it. At the same time, by leveraging [ACP](https://github.com/yetone/avante.nvim#acp-support) it has all capabilities of claude code / gemini-cli / codex! Why not enjoy both?
+Therefore, Avante’s Zen Mode was born! It looks like a Vibe Coding Agent CLI but it is completely Neovim underneath. So you can use your muscle-memory Vim operations and those rich and mature Neovim plugins on it. At the same time, it drives the native Claude Code CLI directly, and via [ACP](https://github.com/yetone/avante.nvim#acp-support) it can reach gemini-cli / codex too! Why not enjoy both?
 Now all you need to do is alias this command to avante; then every time you simply type avante just like using claude code and enter Avante’s Zen Mode!
 
 ==============================================================================
@@ -82,7 +80,8 @@ Now all you need to do is alias this command to avante; then every time you simp
 Avante                                                                  *Avante*
 
 
-M.register_acp_client({client_id}, {client})        *avante.register_acp_client*
+                                                    *avante.register_acp_client*
+M.register_acp_client({client_id}, {client})
     Register an ACP client for cleanup on exit
 
     Parameters: ~
@@ -176,18 +175,13 @@ Common options:
 
 >lua
    require("avante").setup({
-     provider = "claude",
+     provider = "claude_code",
      mode = "agentic",
      instructions_file = "avante.md",
      providers = {
-       claude = {
-         endpoint = "https://api.anthropic.com",
-         model = "claude-sonnet-4-20250514",
-         timeout = 30000,
-         extra_request_body = {
-           temperature = 0.75,
-           max_tokens = 20480,
-         },
+       claude_code = {
+         model = "sonnet",
+         permission_mode = "acceptEdits",
        },
      },
      behaviour = {
@@ -242,29 +236,36 @@ a custom function:
 <
 
 
-Fast Apply
+The Claude Code provider
 
-Fast Apply uses a specialized apply model for faster code edits. Enable it
-and configure Morph:
->
+Avante talks to the native Claude Code CLI through the Python adapter in
+`py/claude-code-adapter`. Install the CLI from https://claude.com/claude-code
+and authenticate it with `claude auth` — Avante never asks for an API key.
+Python 3.9 or newer must be on your $PATH; the adapter has no dependencies of
+its own.
+
+Claude Code runs its own tools and edits files on disk directly, so
+`permission_mode` — not Avante's diff review — is what governs how freely it
+acts:
+>lua
    require("avante").setup({
-     behaviour = {
-       enable_fastapply = true,
-     },
      providers = {
-       morph = {
-         model = "morph-v3-large",
+       claude_code = {
+         model = "opus",
+         --- "acceptEdits" | "plan" | "bypassPermissions" | "manual" | "dontAsk" | "auto"
+         permission_mode = "plan",
+         --- Restrict which built-in tools it may reach for.
+         allowed_tools = { "Read", "Grep", "Glob" },
        },
      },
    })
 <
 
-Set:
->
-   export MORPH_API_KEY="your-api-key"
-<
+Agent Client Protocol agents
 
-Configure ACP providers with `acp_providers`:
+`acp_providers` is empty by default — the native provider above supersedes
+the old `claude-code` ACP entry, which wrapped the CLI in a third-party npm
+shim. Configure your own agent if you want one:
 
 >lua
    require("avante").setup({
@@ -277,19 +278,11 @@ Configure ACP providers with `acp_providers`:
            GEMINI_API_KEY = os.getenv("GEMINI_API_KEY"),
          },
        },
-       ["codex"] = {
-         command = "codex-acp",
-         args = {},
-         env = {
-           NODE_NO_WARNINGS = "1",
-           OPENAI_API_KEY = os.getenv("OPENAI_API_KEY"),
-         },
-       },
      },
    })
 <
 
-Select an ACP-backed provider with |:AvanteSwitchProvider|.
+Select an ACP-backed agent with |:AvanteSwitchProvider|.
 
 You can also set avante options via `vim.g.avante`.
 
@@ -443,9 +436,8 @@ avante.Config                                                    *avante.Config*
                                                                         - If you're concerned about security with automatic tool execution
                                                                         - If you want to manually review each step before applying changes
                                                                         - If you're working in a sensitive environment where automatic code changes aren't desired
-        {auto_suggestions_provider?}  (boolean)                         WARNING: Since auto-suggestions are a high-frequency operation and therefore expensive,
-                                                                        currently designating it as `copilot` provider is dangerous because: https://github.com/yetone/avante.nvim/issues/1048
-                                                                        Of course, you can reduce the request frequency by increasing `suggestion.debounce`.
+        {auto_suggestions_provider?}  (avante.ProviderName)             WARNING: Auto-suggestions are a high-frequency operation and therefore expensive.
+                                                                        Reduce the request frequency by increasing `suggestion.debounce`.
         {providers}                   ({string:AvanteProvider})        To add support for custom provider, follow the format below
                                                                        See https://github.com/yetone/avante.nvim/wiki#custom-providers for more details
         {acp_providers}               ({string:AvanteACPProvider})     Agent Client Protocol providers.  |avante-acp|
@@ -650,6 +642,15 @@ Commands (:AvanteAsk,...)                                      *avante-commands*
                                                      *:AvanteACPModes*
  :AvanteACPModes
          Switch ACP mode.
+
+                                                     *:AvanteClaudeCodeAuth*
+ :AvanteClaudeCodeAuth
+         Start Claude Code's interactive sign-in flow in a terminal split.
+
+                                                     *:AvanteClaudeCodeStatus*
+ :AvanteClaudeCodeStatus
+         Report the Claude Code CLI version, authentication state, installed
+         plugins and how many native slash commands are available.
 
 
 ==============================================================================
@@ -960,10 +961,12 @@ Sidebar:unbind_retry_user_request_key()
 Sidebar:bind_expand_tool_use_key()     *avante-sidebar:bind_expand_tool_use_key*
 
 
-Sidebar:unbind_expand_tool_use_key() *avante-sidebar:unbind_expand_tool_use_key*
+                                     *avante-sidebar:unbind_expand_tool_use_key*
+Sidebar:unbind_expand_tool_use_key()
 
 
-Sidebar:bind_edit_user_request_key() *avante-sidebar:bind_edit_user_request_key*
+                                     *avante-sidebar:bind_edit_user_request_key*
+Sidebar:bind_edit_user_request_key()
 
 
                                    *avante-sidebar:unbind_edit_user_request_key*
@@ -1047,7 +1050,8 @@ Sidebar:should_auto_scroll()                 *avante-sidebar:should_auto_scroll*
         (boolean)
 
 
-Sidebar:update_content({content}, {opts?})       *avante-sidebar:update_content*
+                                                 *avante-sidebar:update_content*
+Sidebar:update_content({content}, {opts?})
 
     Parameters: ~
         {content}  (string)                                                                   concatenated content of the buffer
@@ -1136,8 +1140,7 @@ Sidebar:new_chat()                                     *avante-sidebar:new_chat*
 Sidebar:save_history()                             *avante-sidebar:save_history*
 
 
-                                        *avante-sidebar:delete_history_messages*
-Sidebar:delete_history_messages({uuids})
+Sidebar:delete_history_messages({uuids})*avante-sidebar:delete_history_messages*
 
     Parameters: ~
         {uuids}  (string[])
@@ -1172,7 +1175,8 @@ Sidebar:create_selected_code_container()
 Sidebar:close_input_hint()                     *avante-sidebar:close_input_hint*
 
 
-Sidebar:get_input_float_window_row() *avante-sidebar:get_input_float_window_row*
+                                     *avante-sidebar:get_input_float_window_row*
+Sidebar:get_input_float_window_row()
 
 
 Sidebar:show_input_hint()                       *avante-sidebar:show_input_hint*
@@ -1236,14 +1240,16 @@ Sidebar:get_input_value()                       *avante-sidebar:get_input_value*
 Sidebar:get_selected_code_container_height()
 
 
-Sidebar:get_todos_container_height() *avante-sidebar:get_todos_container_height*
+                                     *avante-sidebar:get_todos_container_height*
+Sidebar:get_todos_container_height()
 
 
                                     *avante-sidebar:get_result_container_height*
 Sidebar:get_result_container_height()
 
 
-Sidebar:get_result_container_width() *avante-sidebar:get_result_container_width*
+                                     *avante-sidebar:get_result_container_width*
+Sidebar:get_result_container_width()
 
 
                                  *avante-sidebar:adjust_result_container_layout*
@@ -1306,7 +1312,8 @@ avante.SlashCommands                                      *avante.SlashCommands*
         {get_builtin_commands}  (fun():AvanteSlashCommand[])
 
 
-M.get_builtin_commands()             *avante-slashcommands.get_builtin_commands*
+                                     *avante-slashcommands.get_builtin_commands*
+M.get_builtin_commands()
 
     Returns: ~
         (AvanteSlashCommand[])
@@ -1362,8 +1369,7 @@ MentionsSource:is_available()                   *avante-completion:is_available*
 MentionsSource.get_position_encoding_kind()
 
 
-                                      *avante-completion:get_trigger_characters*
-MentionsSource:get_trigger_characters()
+MentionsSource:get_trigger_characters()*avante-completion:get_trigger_characters*
 
 
 MentionsSource:get_keyword_pattern()     *avante-completion:get_keyword_pattern*
@@ -1441,7 +1447,8 @@ M.get_data_path()                             *avante-rag-service.get_data_path*
 M.get_current_image()                     *avante-rag-service.get_current_image*
 
 
-M.get_rag_service_runner()           *avante-rag-service.get_rag_service_runner*
+                                     *avante-rag-service.get_rag_service_runner*
+M.get_rag_service_runner()
 
 
 M.launch_rag_service({cb})               *avante-rag-service.launch_rag_service*
@@ -1453,7 +1460,8 @@ M.launch_rag_service({cb})               *avante-rag-service.launch_rag_service*
 M.stop_rag_service()                       *avante-rag-service.stop_rag_service*
 
 
-M.get_rag_service_status()           *avante-rag-service.get_rag_service_status*
+                                     *avante-rag-service.get_rag_service_status*
+M.get_rag_service_status()
 
 
 M.get_scheme()                                   *avante-rag-service.get_scheme*
@@ -1502,7 +1510,8 @@ AvanteRagServiceRetrieveResponse              *AvanteRagServiceRetrieveResponse*
         {sources}   (AvanteRagServiceRetrieveSource[])
 
 
-M.retrieve({base_uri}, {query}, {on_complete})     *avante-rag-service.retrieve*
+                                                   *avante-rag-service.retrieve*
+M.retrieve({base_uri}, {query}, {on_complete})
 
     Parameters: ~
         {base_uri}     (string)
@@ -1606,7 +1615,7 @@ avante tools                                                      *avante-tools*
 >
    require("avante").setup({
      providers = {
-       claude = {
+       claude_code = {
          disable_tools = true,
        },
      },
@@ -1688,7 +1697,8 @@ M.rag_search()                                         *avante-tools.rag_search*
 M.python()                                                 *avante-tools.python*
 
 
-M.get_tools({user_input}, {history_messages})           *avante-tools.get_tools*
+                                                        *avante-tools.get_tools*
+M.get_tools({user_input}, {history_messages})
 
     Parameters: ~
         {user_input}        (string)
@@ -1903,7 +1913,8 @@ M.toggle_wrap({toggle})                               *avante-utils.toggle_wrap*
         {toggle}  (ToggleBind)
 
 
-M.safe_keymap_set({mode}, {lhs}, {rhs}, {opts?})  *avante-utils.safe_keymap_set*
+                                                  *avante-utils.safe_keymap_set*
+M.safe_keymap_set({mode}, {lhs}, {rhs}, {opts?})
 
     Parameters: ~
         {mode}   (string|string[])      Mode short-name, see |nvim_set_keymap()|.
@@ -1924,7 +1935,8 @@ M.trim({str}, {opts?})                                       *avante-utils.trim*
 M.in_visual_mode()                                 *avante-utils.in_visual_mode*
 
 
-M.get_visual_selection_and_range() *avante-utils.get_visual_selection_and_range*
+                                   *avante-utils.get_visual_selection_and_range*
+M.get_visual_selection_and_range()
     Get the selected content and range in Visual mode
 
     Returns: ~
@@ -2112,7 +2124,8 @@ M.try_find_match({original_lines}, {target_lines}, {compare_fn})
         (integer|nil)  end_line
 
 
-M.fuzzy_match({original_lines}, {target_lines})       *avante-utils.fuzzy_match*
+                                                      *avante-utils.fuzzy_match*
+M.fuzzy_match({original_lines}, {target_lines})
 
     Parameters: ~
         {original_lines}  (string[])
@@ -2259,7 +2272,8 @@ M.extract_shortcuts({content})                  *avante-utils.extract_shortcuts*
         (boolean)  has_shortcuts
 
 
-M.open_buffer({path}, {set_current_buf?})             *avante-utils.open_buffer*
+                                                      *avante-utils.open_buffer*
+M.open_buffer({path}, {set_current_buf?})
 
     Parameters: ~
         {path}              (string)
@@ -2308,8 +2322,7 @@ M.trim_think_content({content})                *avante-utils.trim_think_content*
 M.get_filetype()                                     *avante-utils.get_filetype*
 
 
-                                       *avante-utils.read_file_from_buf_or_disk*
-M.read_file_from_buf_or_disk({filepath})
+M.read_file_from_buf_or_disk({filepath})*avante-utils.read_file_from_buf_or_disk*
 
     Parameters: ~
         {filepath}  (string)
@@ -2327,7 +2340,8 @@ M.icons_enabled()                                   *avante-utils.icons_enabled*
         (boolean)
 
 
-M.icon({string_with_icon}, {utf8_fallback})                  *avante-utils.icon*
+                                                             *avante-utils.icon*
+M.icon({string_with_icon}, {utf8_fallback})
     Display an string with icon, if an icon plugin is available.
     Dev icons are an optional install for avante, this function prevents ugly chars
     being displayed by displaying fallback options or nothing at all.
@@ -2394,6 +2408,13 @@ M.llm_tool_param_fields_to_json_schema({fields})
 
 M.get_commands()                                     *avante-utils.get_commands*
     Return available "/commands"
+
+    Returns: ~
+        (AvanteSlashCommand[])
+
+
+M.get_provider_slash_commands()       *avante-utils.get_provider_slash_commands*
+    Slash commands contributed by the active provider, if it offers any.
 
     Returns: ~
         (AvanteSlashCommand[])
@@ -2482,14 +2503,15 @@ What is ACP?
  Supported ACP agents include:
 
  - Gemini CLI
- - Claude Code
  - Goose
  - Codex
  - Kimi CLI
+
+ Claude Code is not in this list: Avante drives its native CLI directly
+ through the `claude_code` provider, which supersedes the ACP shim.
 Before using ACP agents, ensure you have the required tools installed:
 
 - **For Gemini CLI**: Install the `gemini` CLI tool and set your `GEMINI_API_KEY`
-- **For Claude Code**: Install the `acp-claude-code` package via npm and set your `ANTHROPIC_API_KEY`
 
 ACP vs Traditional Providers
 
@@ -2588,19 +2610,22 @@ avante.acp.BaseContent                                  *avante.acp.BaseContent*
         {type}  ()
 
 
-avante.acp.TextContent : avante.acp.BaseContent         *avante.acp.TextContent*
+                                                        *avante.acp.TextContent*
+avante.acp.TextContent : avante.acp.BaseContent
 
     Fields: ~
         {type}  ()
 
 
-avante.acp.ImageContent : avante.acp.BaseContent       *avante.acp.ImageContent*
+                                                       *avante.acp.ImageContent*
+avante.acp.ImageContent : avante.acp.BaseContent
 
     Fields: ~
         {type}  ()
 
 
-avante.acp.AudioContent : avante.acp.BaseContent       *avante.acp.AudioContent*
+                                                       *avante.acp.AudioContent*
+avante.acp.AudioContent : avante.acp.BaseContent
 
     Fields: ~
         {type}  ()
@@ -2613,7 +2638,8 @@ avante.acp.ResourceLinkContent : avante.acp.BaseContent
         {type}  ()
 
 
-avante.acp.ResourceContent : avante.acp.BaseContent *avante.acp.ResourceContent*
+                                                    *avante.acp.ResourceContent*
+avante.acp.ResourceContent : avante.acp.BaseContent
 
     Fields: ~
         {type}  ()
@@ -2771,7 +2797,8 @@ avante.acp.ToolCallUpdate : avante.acp.BaseSessionUpdate
         {sessionUpdate}  ()
 
 
-avante.acp.PlanUpdate : avante.acp.BaseSessionUpdate     *avante.acp.PlanUpdate*
+                                                         *avante.acp.PlanUpdate*
+avante.acp.PlanUpdate : avante.acp.BaseSessionUpdate
 
     Fields: ~
         {sessionUpdate}  ()
@@ -2926,7 +2953,8 @@ ACPClient:_send_result({id}, {result})                 *avante-acp:_send_result*
         (nil)
 
 
-ACPClient:_send_error({id}, {message}, {code?})         *avante-acp:_send_error*
+                                                        *avante-acp:_send_error*
+ACPClient:_send_error({id}, {message}, {code?})
     Send JSON-RPC error
 
     Parameters: ~
@@ -2954,7 +2982,8 @@ ACPClient:_handle_notification({method}, {params})
         {params}  (table)
 
 
-ACPClient:_handle_session_update({params})   *avante-acp:_handle_session_update*
+                                             *avante-acp:_handle_session_update*
+ACPClient:_handle_session_update({params})
     Handle session update notification
 
     Parameters: ~
@@ -3006,7 +3035,8 @@ ACPClient:initialize({callback})                         *avante-acp:initialize*
         {callback}  (fun(err:avante.acp.ACPError|nil))
 
 
-ACPClient:authenticate({method_id}, {callback})        *avante-acp:authenticate*
+                                                       *avante-acp:authenticate*
+ACPClient:authenticate({method_id}, {callback})
     Authentication (if required)
 
     Parameters: ~
@@ -3037,7 +3067,8 @@ ACPClient:set_config_option({session_id}, {config_id}, {value}, {callback})
         {callback}    (fun(config_options:avante.acp.ConfigOption[]|nil,err:avante.acp.ACPError|nil))
 
 
-ACPClient:set_mode({session_id}, {mode_id}, {callback})    *avante-acp:set_mode*
+                                                           *avante-acp:set_mode*
+ACPClient:set_mode({session_id}, {mode_id}, {callback})
     Set session mode via legacy session/set_mode API
 
     Parameters: ~
@@ -3046,7 +3077,8 @@ ACPClient:set_mode({session_id}, {mode_id}, {callback})    *avante-acp:set_mode*
         {callback}    (fun(config_options:avante.acp.ConfigOption[]|nil,err:avante.acp.ACPError|nil))
 
 
-ACPClient:set_model({session_id}, {model_id}, {callback}) *avante-acp:set_model*
+                                                          *avante-acp:set_model*
+ACPClient:set_model({session_id}, {model_id}, {callback})
     Set session model via non-standard session/set_model API.
     Some agents (e.g. OpenCode) support this even without configOptions.
     Agents that don't support it will return -32601 (Method not found).
@@ -3102,8 +3134,7 @@ ACPClient:create_audio_content()               *avante-acp:create_audio_content*
         (table)
 
 
-                                       *avante-acp:create_resource_link_content*
-ACPClient:create_resource_link_content()
+ACPClient:create_resource_link_content()*avante-acp:create_resource_link_content*
 
     Returns: ~
         (table)
@@ -3164,38 +3195,22 @@ ACPClient:send_text_prompt({session_id}, {text}, {callback})
 ==============================================================================
 Model providers                                               *avante-providers*
 
- Avante ships with default providers and supports custom providers.
+ Avante ships with a single built-in provider, `claude_code`, and supports
+ custom providers.
 
- Common provider names include:
+ Rather than talking to an HTTP API, `claude_code` drives the native Claude
+ Code CLI through a small Python adapter, which re-emits the CLI's output as
+ Anthropic Messages API events. See |avante-providers-claude_code|.
 
- - `claude`
- - `openai`
- - `azure`
- - `gemini`
- - `vertex`
- - `cohere`
- - `copilot`
- - `bedrock`
- - `ollama`
- - `watsonx_code_assistant`
- - `mistral`
- - ...
- Please refer to the provider's help section under the tag avante-providers-NAME
+ Custom providers are still supported: give your provider an
+ `__inherited_from` attribute naming the provider it derives from, or a
+ custom `parse_curl_args` function. For more details, see:
+ https://github.com/yetone/avante.nvim/wiki/Custom-providers
 
 avante.Providers                                              *avante.Providers*
 
     Fields: ~
-        {azure}                   (AvanteProviderFunctor)
-        {bedrock}                 (AvanteBedrockProviderFunctor)
-        {claude}                  (AvanteClaudeProviderFunctor)
-        {cohere}                  (AvanteProviderFunctor)
-        {copilot}                 (AvanteProviderFunctor)
-        {gemini}                  (AvanteProviderFunctor)
-        {mistral}                 (AvanteProviderFunctor)
-        {ollama}                  (AvanteProviderFunctor)
-        {openai}                  (AvanteProviderFunctor)
-        {vertex_claude}           (AvanteProviderFunctor)
-        {watsonx_code_assistant}  (AvanteProviderFunctor)
+        {claude_code}  (AvanteClaudeCodeProviderFunctor)
 
 
 EnvironmentHandler                                          *EnvironmentHandler*
@@ -3213,7 +3228,7 @@ M.refresh({provider_name})                            *avante-providers.refresh*
 M.parse_config({opts})                           *avante-providers.parse_config*
 
     Parameters: ~
-        {opts}  (AvanteProvider|AvanteSupportedProvider|AvanteAnthropicProvider|AvanteProviderFunctor|AvanteBedrockProviderFunctor)
+        {opts}  (AvanteProvider|AvanteSupportedProvider|AvanteClaudeCodeProvider|AvanteProviderFunctor)
 
     Returns: ~
         (AvanteDefaultBaseProvider)  provider_opts
@@ -3237,390 +3252,142 @@ M.get_config({provider_name})                      *avante-providers.get_config*
         {provider_name}  (avante.ProviderName)
 
 
-M.get_memory_summary_provider()   *avante-providers.get_memory_summary_provider*
+                                  *avante-providers.get_memory_summary_provider*
+M.get_memory_summary_provider()
 
 
 ==============================================================================
-Bedrock provider                                      *avante-providers-bedrock*
+Claude Code provider                              *avante-providers-claude_code*
 
-Bedrock can use `BEDROCK_KEYS` or the AWS default credentials chain:
-<
-   export BEDROCK_KEYS=aws_access_key_id,aws_secret_access_key,aws_region[,aws_session_token]
->
+ Drives the native Claude Code CLI (`claude`) through a small Python adapter
+ that lives in `py/claude-code-adapter`.
 
- The `aws_session_token` is optional and only needed for temporary AWS
- credentials. If `BEDROCK_KEYS` is not set, Bedrock falls back to the AWS
- default credentials chain (env vars, `~/.aws/credentials`, IAM role, SSO,
- etc.), in which case set `aws_region` and optionally `aws_profile` in the
- bedrock provider config.
+ Unlike the HTTP providers, this one does not talk to an API endpoint. The
+ adapter runs `claude --print --output-format stream-json`, merges the CLI's
+ agentic loop into a single assistant message, and re-emits it as Anthropic
+ Messages API server-sent events — so everything downstream of
+ `parse_response` is unchanged.
 
- Or a Bedrock API key / bearer token: export `AWS_BEARER_TOKEN_BEDROCK`
- (or set `BEDROCK_KEYS` to the token value without any commas). In this
- mode `aws_region` must be set in the bedrock provider config, e.g.:
-<
-   export AWS_BEARER_TOKEN_BEDROCK=your-bedrock-api-key
-   require("avante").setup({
-     providers = {
-       bedrock = {
-         model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-         aws_region = "us-east-1",
-       },
-     },
-   })
->
-See https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys.html.
+ Claude Code runs its own tools (Read, Edit, Bash, ...). Avante's tool runner
+ is therefore disabled for this provider, and the CLI's tool activity is shown
+ inline in the sidebar.
 
-AvanteBedrockProviderFunctor                      *AvanteBedrockProviderFunctor*
+ Claude Code's native slash commands, skills and plugins are surfaced too:
+ the CLI announces them at the start of every turn, they are cached to disk,
+ and Avante offers them alongside its own. A command Avante does not handle
+ itself is passed through untouched for the CLI to resolve.
+
+ Authentication is the CLI's own (`claude auth`); no API key is read. Use
+ |:AvanteClaudeCodeAuth| to sign in and |:AvanteClaudeCodeStatus| to inspect
+ the local installation.
+
+                                               *AvanteClaudeCodeProviderFunctor*
+AvanteClaudeCodeProviderFunctor : AvanteProviderFunctor
 
 
-AWSCreds                                                              *AWSCreds*
+M._sessions                                                        *M._sessions*
+     Claude Code session ids, keyed by conversation. See `M.session_key`.
 
-    Fields: ~
-        {access_key_id}      (string)
-        {secret_access_key}  (string)
-        {session_token}      (string)
-
-
-M.setup()                                       *avante-providers-bedrock.setup*
+    Type: ~
+        (table<string,string>)
 
 
-M.load_model_handler()             *avante-providers-bedrock.load_model_handler*
+M._capabilities                                                *M._capabilities*
+     What the running Claude Code install offers: its slash commands, skills,
+     plugins, MCP servers, tools, model and auth source. Populated from the
+     `avante_capabilities` event at the start of every turn, and reloaded from
+     disk at startup so commands are available before the first message.
+
+    Type: ~
+        (table<string,any>)
 
 
-M.is_env_set()                             *avante-providers-bedrock.is_env_set*
+                                *avante-providers-claude_code.load_capabilities*
+M.load_capabilities()
+     Load the cached capabilities, if any. Failures are not worth reporting:
+     the next turn repopulates them.
 
 
-M:parse_messages()                     *avante-providers-bedrock:parse_messages*
+M.session_key({messages})             *avante-providers-claude_code.session_key*
+     A stable identifier for the conversation a request belongs to.
 
-
-M:parse_response()                     *avante-providers-bedrock:parse_response*
-
-
-M:transform_tool()                     *avante-providers-bedrock:transform_tool*
-
-
-M:build_bedrock_payload()       *avante-providers-bedrock:build_bedrock_payload*
-
-
-M:parse_stream_data()               *avante-providers-bedrock:parse_stream_data*
-
-
-                        *avante-providers-bedrock:parse_response_without_stream*
-M:parse_response_without_stream()
-
-
-M:parse_curl_args({prompt_opts})      *avante-providers-bedrock:parse_curl_args*
+     The first user message never changes for the life of a chat, so hashing it
+     lets consecutive turns find the Claude Code session they should resume.
 
     Parameters: ~
-        {prompt_opts}  (AvantePromptOptions)
+        {messages}  (AvanteLLMMessage[])  @return string?
 
-    Returns: ~
-        (AvanteCurlOutput|nil)
 
+                                *avante-providers-claude_code:is_disable_stream*
+M:is_disable_stream()
 
-M.on_error()                                 *avante-providers-bedrock.on_error*
 
+M:is_env_set()                         *avante-providers-claude_code:is_env_set*
 
-                                  *avante-providers-bedrock:get_aws_credentials*
-M:get_aws_credentials({region}, {profile})
-     get_aws_credentials returns aws credentials using the aws cli
 
-    Parameters: ~
-        {region}   (string)
-        {profile}  (string)
+M:setup()                                   *avante-providers-claude_code:setup*
 
-    Returns: ~
-        (AWSCreds)
 
-
-M.check_aws_cli_installed()   *avante-providers-bedrock.check_aws_cli_installed*
-     check_aws_cli_installed returns true when the aws cli is installed
-     @return boolean
-
-
-                  *avante-providers-bedrock.check_curl_version_supports_aws_sig*
-M.check_curl_version_supports_aws_sig()
-     check_curl_version_supports_aws_sig checks if the given curl version supports aws sigv4 correctly
-     we require at least version 8.10.0 because it contains critical fixes for aws sigv4 support
-     https://curl.se/ch/8.10.0.html
-     @param version_string string The curl version string to check
-     @return boolean
-
-
-                          *avante-providers-bedrock.check_curl_supports_aws_sig*
-M.check_curl_supports_aws_sig()
-     check_curl_supports_aws_sig returns true when the installed curl version supports aws sigv4
-     @return boolean
-
-
-==============================================================================
-Anthropic provider                                     *avante-providers-claude*
-
- Avante supports both the 'api' and 'max' authentications
-
- Set the Claude provider `auth_type` to `"max"`:
-
-AvanteAnthropicProvider : AvanteDefaultBaseProvider    *AvanteAnthropicProvider*
-
-    Fields: ~
-        {auth_type}  ()
-
-
-ClaudeAuthToken                                                *ClaudeAuthToken*
-
-    Fields: ~
-        {access_token}   (string)
-        {refresh_token}  (string)
-        {expires_at}     (integer)
-
-
-AvanteClaudeProviderFunctor                        *AvanteClaudeProviderFunctor*
-
-
-M.setup()                                        *avante-providers-claude.setup*
-
-
-M.setup_claude_timer()              *avante-providers-claude.setup_claude_timer*
-    @nodoc
-
-
-                             *avante-providers-claude:get_rate_limit_sleep_time*
-M:get_rate_limit_sleep_time({headers})
-
-    Parameters: ~
-        {headers}  (table<string,string>)
-
-    Returns: ~
-        (integer|nil)
-
-
-                            *avante-providers-claude.is_temperature_unsupported*
-M.is_temperature_unsupported({model})
-
-    Parameters: ~
-        {model}  (string|nil)
-
-    Returns: ~
-        (boolean)
-
-
-                                        *avante-providers-claude:transform_tool*
-M:transform_tool({self}, {tool}, {use_prefix?})
-
-    Parameters: ~
-        {self}         (AvanteProviderFunctor)
-        {tool}         (AvanteLLMTool)
-        {use_prefix?}  (boolean)                Whether to prefix tool names (for OAuth)
-
-    Returns: ~
-        (AvanteClaudeTool)
-
-
-M:is_disable_stream()                *avante-providers-claude:is_disable_stream*
-
-
-M:parse_messages()                      *avante-providers-claude:parse_messages*
-
-    Returns: ~
-        (AvanteClaudeMessage[])
-
-
-                             *avante-providers-claude.transform_anthropic_usage*
-M.transform_anthropic_usage({usage})
-
-    Parameters: ~
-        {usage}  (avante.AnthropicTokenUsage|nil)
-
-    Returns: ~
-        (avante.LLMTokenUsage|nil)
-
-
-M:parse_response()                      *avante-providers-claude:parse_response*
-
-
-M:parse_curl_args({prompt_opts})       *avante-providers-claude:parse_curl_args*
-
-    Parameters: ~
-        {prompt_opts}  (AvantePromptOptions)
-
-    Returns: ~
-        (AvanteCurlOutput|nil)
-
-
-M.on_error()                                  *avante-providers-claude.on_error*
-
-
-M.authenticate()                          *avante-providers-claude.authenticate*
-
-
-M.refresh_token({async}, {force})        *avante-providers-claude.refresh_token*
-     Function to refresh an expired claude auth token
-
-    Parameters: ~
-        {async}  (boolean)  whether to refresh the token asynchronously
-        {force}  (boolean)  whether to force the refresh
-
-
-M.store_tokens()                          *avante-providers-claude.store_tokens*
-
-
-M.cleanup_claude()                      *avante-providers-claude.cleanup_claude*
-
-
-==============================================================================
-Ollama provider                                        *avante-providers-ollama*
-
-                                                   *AvanteOllamaProviderFunctor*
-AvanteOllamaProviderFunctor : AvanteProviderFunctor
-
-
-M.is_env_set()                              *avante-providers-ollama.is_env_set*
-    Ollama is disabled by default. Users should override is_env_set()
-    implementation in their configs to enable it. There is a helper
-    check_endpoint_alive() that can be used to test if configured
-    endpoint is alive that can be used in place of is_env_set().
-
-
-M:is_disable_stream()                *avante-providers-ollama:is_disable_stream*
-
-
-avante.OllamaFunction                                    *avante.OllamaFunction*
-
-    Fields: ~
-        {name}       (string)
-        {arguments}  (table)
-
-
-avante.OllamaToolCall                                    *avante.OllamaToolCall*
-
-    Fields: ~
-        {function}  (avante.OllamaFunction)
-
-
-                                 *avante-providers-ollama:add_tool_use_messages*
-M:add_tool_use_messages({tool_calls}, {opts})
-
-    Parameters: ~
-        {tool_calls}  (avante.OllamaToolCall[])
-        {opts}        (AvanteHandlerOptions)
-
-
-M:parse_curl_args({prompt_opts})       *avante-providers-ollama:parse_curl_args*
-
-    Parameters: ~
-        {prompt_opts}  (AvantePromptOptions)
-
-    Returns: ~
-        (AvanteCurlOutput|nil)
-
-
-M.on_error({result})                          *avante-providers-ollama.on_error*
-
-    Parameters: ~
-        {result}  (table)
-
-
-M:list_models()                            *avante-providers-ollama:list_models*
-
-
-M.check_endpoint_alive()          *avante-providers-ollama.check_endpoint_alive*
-
-
-==============================================================================
-OpenAI provider                                        *avante-providers-openai*
-
-AvanteProviderFunctor                                    *AvanteProviderFunctor*
-
-
-M:is_disable_stream()                *avante-providers-openai:is_disable_stream*
-
-
-M:transform_tool({tool})                *avante-providers-openai:transform_tool*
-
-    Parameters: ~
-        {tool}  (AvanteLLMTool)
-
-    Returns: ~
-        (AvanteOpenAITool)
-
-
-M.is_openrouter()                        *avante-providers-openai.is_openrouter*
-    Check if url belongs to openrouter
-
-    Returns: ~
-        (boolean)
-
-
-M.is_mistral()                              *avante-providers-openai.is_mistral*
-    Check if url belongs to mistral
-
-    Returns: ~
-        (boolean)
-
-
-M:list_models()                            *avante-providers-openai:list_models*
-    Asking remote provider to list available models
-
-    Returns: ~
-        (AvanteProviderModelList)
-
-
-M.get_user_message({opts})            *avante-providers-openai.get_user_message*
+                                   *avante-providers-claude_code:parse_messages*
+M:parse_messages({opts})
 
     Parameters: ~
         {opts}  (AvantePromptOptions)
 
-
-M.is_reasoning_model()              *avante-providers-openai.is_reasoning_model*
-
-
-M.set_allowed_params()              *avante-providers-openai.set_allowed_params*
-
-
-M:parse_messages()                      *avante-providers-openai:parse_messages*
-
-
-M:finish_pending_messages()    *avante-providers-openai:finish_pending_messages*
-
-
-M:add_text_message()                  *avante-providers-openai:add_text_message*
-
-
-M:add_thinking_message()          *avante-providers-openai:add_thinking_message*
-
-
-M:add_tool_use_message()          *avante-providers-openai:add_tool_use_message*
-
-
-M:add_reasoning_message()        *avante-providers-openai:add_reasoning_message*
-
-
-                                *avante-providers-openai.transform_openai_usage*
-M.transform_openai_usage({usage})
-
-    Parameters: ~
-        {usage}  (avante.OpenAITokenUsage|nil)
-
     Returns: ~
-        (avante.LLMTokenUsage|nil)
+        (table[])
 
 
-M:parse_response()                      *avante-providers-openai:parse_response*
-     Parse response
-     Updates status
-
-
-                         *avante-providers-openai:parse_response_without_stream*
-M:parse_response_without_stream()
-
-
-M:parse_curl_args({prompt_opts})       *avante-providers-openai:parse_curl_args*
+                            *avante-providers-claude_code:parse_subprocess_args*
+M:parse_subprocess_args({prompt_opts})
 
     Parameters: ~
         {prompt_opts}  (AvantePromptOptions)
 
     Returns: ~
-        (AvanteCurlOutput|nil)
+        (AvanteSubprocessOutput|nil)
+
+
+                                  *avante-providers-claude_code.transform_usage*
+M.transform_usage({usage})
+
+    Parameters: ~
+        {usage}  (table|nil)
+
+    Returns: ~
+        (avante.LLMTokenUsage|nil)
+
+
+                                   *avante-providers-claude_code:parse_response*
+M:parse_response()
+
+
+                              *avante-providers-claude_code.list_slash_commands*
+M.list_slash_commands()
+     Claude Code's own slash commands, as Avante slash commands.
+
+     They carry no callback: Avante passes the text through and the CLI resolves
+     the command itself. Avante's built-in commands of the same name win, since
+     those act on the Avante-side conversation.
+
+    Returns: ~
+        (AvanteSlashCommand[])
+
+
+M.probe()                                   *avante-providers-claude_code.probe*
+
+
+M.auth_status()                       *avante-providers-claude_code.auth_status*
+
+
+M.auth_login()                         *avante-providers-claude_code.auth_login*
+     Start Claude Code's interactive sign-in flow in a terminal split.
+
+
+M:list_models()                       *avante-providers-claude_code:list_models*
+
+    Returns: ~
+        (AvanteProviderModelList|nil)
 
 
 ==============================================================================

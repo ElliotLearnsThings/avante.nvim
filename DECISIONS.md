@@ -179,7 +179,60 @@ itself unavailable instead of erroring.
 
 ---
 
-## 8. Smaller calls
+## 8. Native commands, plugins and auth
+
+Using the real CLI means its own extension surface comes along, and leaving it
+inaccessible would waste the main advantage of this design.
+
+### Slash commands
+
+Claude Code resolves `/compact`, `/context`, skills and plugin commands itself,
+and a message beginning with `/` sent over stream-json is handled natively — no
+special casing needed on our side. So the provider contributes them to Avante's
+slash-command list **without a callback**: Avante offers the name, then passes
+the text through untouched.
+
+Avante's own commands win a name clash. `/compact` exists on both sides, and
+Avante's acts on the Avante-side conversation, which is what a user typing it in
+the sidebar means.
+
+Discovery is the awkward part: the CLI only announces its commands in the `init`
+record of a turn, and a turn costs tokens. Feeding it empty stdin exits before
+`init` is emitted, so there is no free probe. The provider therefore harvests
+the announcement from **every** turn and caches it to
+`stdpath("cache")/avante/claude_code_capabilities.json`, reloading it at
+startup. Commands are available immediately in every session after the first
+message ever sent.
+
+`Utils.get_commands` gained a generic third source rather than a Claude Code
+special case: any provider exposing `list_slash_commands` contributes.
+
+The capability table is mutated in place, never rebound. `Providers.__index`
+builds the provider table with `vim.tbl_deep_extend`, which shares references
+for tables present in only one source — so rebinding the field would silently
+strand that copy on the original empty table.
+
+### Plugins
+
+`plugin_dirs` and `plugin_urls` map to `--plugin-dir` / `--plugin-url`, which
+are per-session: they layer on top of whatever `claude plugin install` has
+already set up globally. Installed plugins are reported by
+`:AvanteClaudeCodeStatus` rather than managed from Neovim — `claude plugin` is a
+complete CLI already, and wrapping it would only add a second thing to keep in
+sync.
+
+### Auth
+
+There is no API key, so avante's key-prompt path is inert and health checks had
+nothing to verify. `claude auth status --json` answers locally and cheaply, and
+`claude plugin list --json` and `claude --version` do too. The adapter exposes
+all three behind a `--probe` flag that starts no turn and spends no tokens; it
+backs `:AvanteClaudeCodeStatus` and the `:checkhealth` entry.
+
+`:AvanteClaudeCodeAuth` runs `claude auth login` in a terminal split rather than
+a job, because the sign-in flow is interactive and needs a real TTY.
+
+## 9. Smaller calls
 
 - **`tokenizer_id` stays `"gpt-4o"`.** It selects tiktoken in
   `crates/avante-tokenizers`; anything else triggers a HuggingFace Hub download

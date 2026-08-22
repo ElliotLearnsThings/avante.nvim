@@ -738,6 +738,9 @@ All of the following live under `providers.claude_code`:
 | `add_dirs`           | `string[]`          | Extra directories Claude Code may reach outside `cwd`.                                                   |
 | `mcp_config`         | `string[]`          | MCP server configuration files or JSON strings, one `--mcp-config` each.                                 |
 | `strict_mcp_config`  | `boolean`           | Ignore every MCP server that is not listed in `mcp_config`. Default `false`.                             |
+| `plugin_dirs`        | `string[]`          | Claude Code plugin directories or `.zip` files, loaded for this session only.                            |
+| `plugin_urls`        | `string[]`          | URLs of Claude Code plugin `.zip` files, loaded for this session only.                                   |
+| `disable_slash_commands` | `boolean`       | Offer only avante's slash commands, not Claude Code's. Default `false`.                                  |
 | `settings`           | `string?`           | A Claude Code settings file path or a JSON string.                                                       |
 | `setting_sources`    | `string?`           | Which setting sources the CLI should load.                                                               |
 | `agents`             | `string?`           | Custom agent definitions, as a JSON string.                                                              |
@@ -762,6 +765,54 @@ providers = {
   },
 }
 ```
+
+### Native slash commands
+
+Claude Code's own slash commands — `/context`, `/compact`, your skills, anything
+a plugin contributes — are offered in the avante input buffer alongside
+avante's. Typing one passes the text through untouched and the CLI resolves it,
+so they behave exactly as they do in a terminal session.
+
+Where a name exists on both sides, avante's wins: its `/compact` acts on the
+avante-side conversation, which is what typing it in the sidebar means.
+
+The CLI announces its command list at the start of every turn, so avante learns
+it from your first message and caches it to
+`stdpath("cache")/avante/claude_code_capabilities.json`. From then on the
+commands are available immediately at startup. Set `disable_slash_commands = true`
+to offer only avante's.
+
+### Plugins
+
+Plugins you have installed with `claude plugin install` are picked up
+automatically. To load one for avante sessions only — a work-in-progress plugin,
+say — point `plugin_dirs` or `plugin_urls` at it:
+
+```lua
+providers = {
+  claude_code = {
+    plugin_dirs = { "~/src/my-plugin", "~/Downloads/reviewer.zip" },
+    plugin_urls = { "https://example.com/plugins/linting.zip" },
+  },
+}
+```
+
+Run `:AvanteClaudeCodeStatus` to see which plugins are active.
+
+### Authentication
+
+There is no API key to set. Claude Code authenticates itself, and avante uses
+whatever session the CLI already has:
+
+```sh
+claude auth login     # or run :AvanteClaudeCodeAuth from Neovim
+claude auth status
+```
+
+`:AvanteClaudeCodeAuth` opens the interactive sign-in flow in a terminal split.
+`:AvanteClaudeCodeStatus` reports the CLI version, how you are signed in,
+installed plugins and how many native commands are available; `:checkhealth
+avante` covers the same ground.
 
 ## Blink.cmp users
 
@@ -1124,6 +1175,8 @@ return {
 | `:AvanteToggle`                    | Toggle the Avante sidebar                                                                                   |                                                     |
 | `:AvanteModels`                    | Show model list                                                                                             |                                                     |
 | `:AvanteSwitchSelectorProvider`    | Switch avante selector provider (e.g. native, telescope, fzf_lua, mini_pick, snacks)                        |                                                     |
+| `:AvanteClaudeCodeAuth`            | Sign in to Claude Code, in a terminal split                                                                 |                                                     |
+| `:AvanteClaudeCodeStatus`          | Show the Claude Code CLI version, authentication state, plugins and native commands                         |                                                     |
 
 ## Highlight Groups
 

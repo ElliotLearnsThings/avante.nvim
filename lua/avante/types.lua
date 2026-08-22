@@ -223,6 +223,9 @@ vim.g.avante_login = vim.g.avante_login
 ---@field add_dirs? string[] Extra directories Claude Code is allowed to touch
 ---@field mcp_config? string[] MCP server config files or JSON strings
 ---@field strict_mcp_config? boolean Ignore MCP servers outside `mcp_config`
+---@field plugin_dirs? string[] Claude Code plugin directories or .zip files, for this session
+---@field plugin_urls? string[] URLs of Claude Code plugin .zip files, for this session
+---@field disable_slash_commands? boolean Offer only Avante's slash commands, not Claude Code's
 ---@field settings? string Settings file path or JSON string
 ---@field setting_sources? string Comma-separated list of "user", "project", "local"
 ---@field agents? string Custom agent definitions, as a JSON string

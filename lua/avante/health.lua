@@ -93,14 +93,40 @@ function M.check_claude_code()
     return
   end
 
+  local found_python = false
   for _, candidate in ipairs({ "python3", "python" }) do
     local resolved = vim.fn.exepath(candidate)
     if resolved ~= "" then
       H.ok(string.format("Found Python interpreter: %s", resolved))
-      return
+      found_python = true
+      break
     end
   end
-  H.warn("No Python 3 interpreter found (tried python3, python). Set providers.claude_code.python_path")
+  if not found_python then
+    H.warn("No Python 3 interpreter found (tried python3, python). Set providers.claude_code.python_path")
+    return
+  end
+
+  M.check_claude_code_auth(cli_path)
+end
+
+--- Report whether the Claude Code CLI is signed in
+---
+--- This shells out, so it is skipped when the CLI or Python is missing —
+--- there would be nothing to ask.
+---@param cli_path string
+function M.check_claude_code_auth(cli_path)
+  if cli_path == "" then return end
+  local ok, logged_in, detail = pcall(require("avante.providers.claude_code").auth_status)
+  if not ok then
+    H.warn("Could not read Claude Code authentication status: " .. tostring(logged_in))
+    return
+  end
+  if logged_in then
+    H.ok(string.format("Claude Code is signed in: %s", detail))
+  else
+    H.error(string.format("Claude Code is not authenticated (%s). Run :AvanteClaudeCodeAuth", detail))
+  end
 end
 
 -- Check TreeSitter functionality and parsers

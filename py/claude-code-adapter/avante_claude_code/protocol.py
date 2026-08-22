@@ -25,6 +25,10 @@ SESSION_EVENT = "avante_session"
 #: they are informational, so they travel under a private event name.
 TOOL_ACTIVITY_EVENT = "avante_tool_activity"
 
+#: Emitted once per turn with what this Claude Code session actually has:
+#: its slash commands, skills, plugins, MCP servers, tools and auth source.
+CAPABILITIES_EVENT = "avante_capabilities"
+
 
 @dataclass
 class AdapterRequest:
@@ -46,6 +50,9 @@ class AdapterRequest:
     add_dirs: list[str] = field(default_factory=list)
     mcp_config: list[str] = field(default_factory=list)
     strict_mcp_config: bool = False
+    plugin_dirs: list[str] = field(default_factory=list)
+    plugin_urls: list[str] = field(default_factory=list)
+    disable_slash_commands: bool = False
     settings: str | None = None
     setting_sources: str | None = None
     agents: str | None = None

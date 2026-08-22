@@ -5,8 +5,8 @@ from __future__ import annotations
 import io
 import json
 
-from avante_claude_code.protocol import SESSION_EVENT, AdapterRequest, SSEWriter
 from avante_claude_code.cli import build_args, build_stdin_messages
+from avante_claude_code.protocol import CAPABILITIES_EVENT, SESSION_EVENT, AdapterRequest, SSEWriter
 from avante_claude_code.translator import StreamTranslator
 
 
@@ -17,11 +17,7 @@ def drive(records: list[dict]) -> list[dict]:
     for record in records:
         translator.handle(record)
     translator.finish()
-    return [
-        json.loads(line[len("data: ") :])
-        for line in buffer.getvalue().splitlines()
-        if line.startswith("data: ")
-    ]
+    return [json.loads(line[len("data: ") :]) for line in buffer.getvalue().splitlines() if line.startswith("data: ")]
 
 
 def stream(event: dict) -> dict:
@@ -41,7 +37,7 @@ def test_text_turn_is_passed_through() -> None:
             stream({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
             stream({"type": "content_block_stop", "index": 0}),
             {"type": "result", "is_error": False, "stop_reason": "end_turn", "usage": {"input_tokens": 3, "output_tokens": 4}},
-        ]
+        ],
     )
     types = [event["type"] for event in events]
     assert types == [
@@ -71,7 +67,7 @@ def test_several_assistant_messages_merge_into_one() -> None:
             stream({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "b"}}),
             stream({"type": "content_block_stop", "index": 0}),
             {"type": "result", "is_error": False, "stop_reason": "end_turn", "usage": {"output_tokens": 2}},
-        ]
+        ],
     )
     assert [event["type"] for event in events].count("message_start") == 1
     assert [event["type"] for event in events].count("message_stop") == 1
@@ -91,14 +87,14 @@ def test_cli_tool_calls_become_text_not_tool_use() -> None:
                     "type": "content_block_start",
                     "index": 0,
                     "content_block": {"type": "tool_use", "id": "t1", "name": "Read", "input": {}},
-                }
+                },
             ),
             stream(
                 {
                     "type": "content_block_delta",
                     "index": 0,
                     "delta": {"type": "input_json_delta", "partial_json": '{"file_path": "a.txt"}'},
-                }
+                },
             ),
             stream({"type": "content_block_stop", "index": 0}),
             {
@@ -106,12 +102,10 @@ def test_cli_tool_calls_become_text_not_tool_use() -> None:
                 "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
             },
             {"type": "result", "is_error": False, "stop_reason": "end_turn"},
-        ]
+        ],
     )
     assert all(event.get("content_block", {}).get("type") != "tool_use" for event in events)
-    text = "".join(
-        event["delta"].get("text", "") for event in events if event["type"] == "content_block_delta"
-    )
+    text = "".join(event["delta"].get("text", "") for event in events if event["type"] == "content_block_delta")
     assert "Read(a.txt)" in text
     assert "⎿ ok" in text
 
@@ -139,3 +133,51 @@ def test_resume_only_replays_the_trailing_user_turn() -> None:
     )
     (message,) = build_stdin_messages(request)
     assert message["message"]["content"][0]["text"] == "second"
+
+
+def test_init_record_announces_capabilities() -> None:
+    """Slash commands, skills and plugins reach Neovim so it can offer them too."""
+    events = drive(
+        [
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "sid-2",
+                "slash_commands": ["compact", "context"],
+                "skills": ["pdf"],
+                "plugins": [],
+                "tools": ["Read"],
+                "model": "claude-sonnet-5",
+                "apiKeySource": "none",
+                "permissionMode": "acceptEdits",
+                "irrelevant": "dropped",
+            },
+        ],
+    )
+    capabilities = next(event for event in events if event["type"] == CAPABILITIES_EVENT)
+    assert capabilities["slash_commands"] == ["compact", "context"]
+    assert capabilities["skills"] == ["pdf"]
+    assert capabilities["model"] == "claude-sonnet-5"
+    assert capabilities["apiKeySource"] == "none"
+    assert "irrelevant" not in capabilities
+
+
+def test_plugin_and_command_flags_reach_the_cli() -> None:
+    args = build_args(
+        AdapterRequest(
+            plugin_dirs=["/a/plugin", "/b.zip"],
+            plugin_urls=["https://example.test/p.zip"],
+            disable_slash_commands=True,
+        ),
+    )
+    assert args.count("--plugin-dir") == 2
+    assert args[args.index("--plugin-dir") + 1] == "/a/plugin"
+    assert args[args.index("--plugin-url") + 1] == "https://example.test/p.zip"
+    assert "--disable-slash-commands" in args
+
+
+def test_slash_command_text_is_sent_verbatim() -> None:
+    """Claude Code resolves its own slash commands, so we must not mangle them."""
+    request = AdapterRequest(messages=[{"role": "user", "content": "/compact keep the API notes"}])
+    (message,) = build_stdin_messages(request)
+    assert message["message"]["content"][0]["text"] == "/compact keep the API notes"

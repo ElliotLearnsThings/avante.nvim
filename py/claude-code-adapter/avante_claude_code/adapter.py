@@ -12,6 +12,7 @@ import threading
 from typing import IO, Any
 
 from .cli import build_args, build_env, build_stdin_messages
+from .probe import probe
 from .protocol import AdapterRequest, SSEWriter
 from .translator import StreamTranslator
 
@@ -136,8 +137,15 @@ def _terminate(process: subprocess.Popen[str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point: read one request from stdin, stream one turn to stdout."""
+    """
+    Entry point.
+
+    With ``--probe`` it answers a few local CLI questions as one JSON object and
+    exits; otherwise it reads one request from stdin and streams one turn.
+    """
     argv = list(sys.argv[1:] if argv is None else argv)
+    if "--probe" in argv:
+        return _probe(argv)
     raw = sys.stdin.read()
     writer = SSEWriter()
     if not raw.strip():
@@ -149,3 +157,16 @@ def main(argv: list[str] | None = None) -> int:
         writer.error(f"malformed adapter request: {exc}", kind="bad_request")
         return 2
     return run(request, writer)
+
+
+def _probe(argv: list[str]) -> int:
+    """Print the local installation report as JSON. Never starts a turn."""
+    cli_path = "claude"
+    if "--cli-path" in argv:
+        index = argv.index("--cli-path")
+        if index + 1 < len(argv):
+            cli_path = argv[index + 1]
+    json.dump(probe(cli_path), sys.stdout)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0

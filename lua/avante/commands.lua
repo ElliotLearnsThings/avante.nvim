@@ -79,6 +79,15 @@
 --- :AvanteACPModes
 ---         Switch ACP mode.
 ---
+---                                                     *:AvanteClaudeCodeAuth*
+--- :AvanteClaudeCodeAuth
+---         Start Claude Code's interactive sign-in flow in a terminal split.
+---
+---                                                     *:AvanteClaudeCodeStatus*
+--- :AvanteClaudeCodeStatus
+---         Report the Claude Code CLI version, authentication state, installed
+---         plugins and how many native slash commands are available.
+---
 ---@brief ]]
 
 local M = {}

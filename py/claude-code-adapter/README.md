@@ -27,6 +27,8 @@ avante.nvim  ───────────────────▶  adapt
 | `resume` | a previous Claude Code session id to continue |
 | `permission_mode` | `acceptEdits`, `bypassPermissions`, `plan`, … |
 | `tools`, `allowed_tools`, `disallowed_tools` | which built-in tools may run (`[]` disables all) |
+| `plugin_dirs`, `plugin_urls` | Claude Code plugins loaded for this session only |
+| `disable_slash_commands` | suppress the CLI's own slash commands |
 | `cli_path`, `extra_args`, `env` | escape hatches for anything not modelled above |
 
 **Out** — Anthropic Messages API server-sent events on stdout, exactly as
@@ -37,6 +39,9 @@ Two extra event names are emitted outside the Anthropic set:
 
 - `avante_session` — carries the Claude Code `session_id` so the next turn can
   `--resume` it instead of resending the transcript.
+- `avante_capabilities` — what this session actually has: its slash commands,
+  skills, agents, plugins, MCP servers, tools, model and auth source. Neovim
+  caches this so it can offer the same commands the CLI would.
 - `error` — an Anthropic-shaped error envelope for CLI failures.
 
 ## Why a translation layer is needed
@@ -64,6 +69,27 @@ runner would run them a second time. They render in the sidebar as
 echo '{"model":"sonnet","messages":[{"role":"user","content":"hi"}]}' \
   | python3 -m avante_claude_code
 ```
+
+## Probing
+
+`--probe` answers a few questions about the local installation and exits. It
+only calls CLI subcommands that resolve locally, so no turn is started and no
+tokens are spent:
+
+```sh
+python3 -m avante_claude_code --probe [--cli-path /path/to/claude]
+```
+
+```json
+{
+  "cli_path": "claude",
+  "version": { "ok": true, "value": "2.1.240 (Claude Code)" },
+  "auth": { "ok": true, "value": { "loggedIn": true, "authMethod": "oauth_token" } },
+  "plugins": { "ok": true, "value": [] }
+}
+```
+
+This backs `:AvanteClaudeCodeStatus` and `:checkhealth avante`.
 
 ## Tests
 

@@ -1575,8 +1575,28 @@ function M.get_commands()
       seen[command.name] = true
     end
   end
+  -- Commands the provider resolves itself, e.g. Claude Code's native ones.
+  -- Avante's own win on a name clash: those act on the Avante-side chat.
+  for _, command in ipairs(M.get_provider_slash_commands()) do
+    if not seen[command.name] then
+      table.insert(commands, command)
+      seen[command.name] = true
+    end
+  end
 
   return commands
+end
+
+---Slash commands contributed by the active provider, if it offers any.
+---@return AvanteSlashCommand[]
+function M.get_provider_slash_commands()
+  local Config = require("avante.config")
+  if Config.acp_providers[Config.provider] then return {} end
+  local ok, provider = pcall(function() return require("avante.providers")[Config.provider] end)
+  if not ok or type(provider) ~= "table" or type(provider.list_slash_commands) ~= "function" then return {} end
+  local listed_ok, listed = pcall(provider.list_slash_commands)
+  if not listed_ok or type(listed) ~= "table" then return {} end
+  return listed
 end
 
 function M.get_timestamp() return tostring(os.date("%Y-%m-%d %H:%M:%S")) end

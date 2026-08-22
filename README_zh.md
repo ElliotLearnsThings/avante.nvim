@@ -536,6 +536,9 @@ Claude Code 会直接拒绝该操作，而不是一直等待。这正是默认�
 | `add_dirs`           | `string[]`             | 除 `cwd` 之外，允许 Claude Code 访问的额外目录。                                 |
 | `mcp_config`         | `string[]`             | MCP 服务器配置文件路径或 JSON 字符串，每一项对应一个 `--mcp-config`。            |
 | `strict_mcp_config`  | `boolean`              | 忽略所有未在 `mcp_config` 中列出的 MCP 服务器。默认 `false`。                    |
+| `plugin_dirs`        | `string[]`             | Claude Code 插件目录或 `.zip` 文件，仅在本次会话中加载。                         |
+| `plugin_urls`        | `string[]`             | Claude Code 插件 `.zip` 文件的 URL，仅在本次会话中加载。                         |
+| `disable_slash_commands` | `boolean`          | 只提供 avante 自己的斜杠命令，不提供 Claude Code 的。默认 `false`。              |
 | `settings`           | `string?`              | Claude Code 的设置文件路径或 JSON 字符串。                                       |
 | `setting_sources`    | `string?`              | CLI 需要加载的设置来源。                                                         |
 | `agents`             | `string?`              | 自定义 agent 定义，JSON 字符串。                                                 |
@@ -560,6 +563,49 @@ providers = {
   },
 }
 ```
+
+### 原生斜杠命令
+
+Claude Code 自己的斜杠命令——`/context`、`/compact`、您的 skills，以及各类插件提供的
+命令——都会和 avante 自己的斜杠命令一起出现在 avante 的输入框中。输入其中之一时，文本
+会被原样透传给 CLI 并由它解析，因此它们的行为与在终端会话中完全一致。
+
+当同一个名字在两边都存在时，以 avante 的为准：avante 的 `/compact` 作用于 avante 这一
+侧的对话，而这正是在侧边栏中输入它所要表达的意思。
+
+CLI 会在每一轮对话开始时公布自己的命令列表，因此 avante 会从您的第一条消息中学到它，
+并缓存到 `stdpath("cache")/avante/claude_code_capabilities.json`。此后每次启动时这些
+命令都可以立即使用。设置 `disable_slash_commands = true`，则只提供 avante 自己的斜杠
+命令。
+
+### 插件
+
+您用 `claude plugin install` 安装的插件会被自动识别。如果某个插件只想在 avante 会话中
+加载——例如一个还在开发中的插件——把 `plugin_dirs` 或 `plugin_urls` 指向它即可：
+
+```lua
+providers = {
+  claude_code = {
+    plugin_dirs = { "~/src/my-plugin", "~/Downloads/reviewer.zip" },
+    plugin_urls = { "https://example.com/plugins/linting.zip" },
+  },
+}
+```
+
+运行 `:AvanteClaudeCodeStatus` 即可查看当前生效的插件。
+
+### 认证
+
+这里没有需要设置的 API key。Claude Code 自己完成认证，avante 直接复用 CLI 已有的会话：
+
+```sh
+claude auth login     # 或在 Neovim 中执行 :AvanteClaudeCodeAuth
+claude auth status
+```
+
+`:AvanteClaudeCodeAuth` 会在一个终端分屏中打开交互式登录流程。
+`:AvanteClaudeCodeStatus` 会报告 CLI 版本、您的登录方式、已安装的插件，以及有多少原生
+命令可用；`:checkhealth avante` 给出的信息也是一样的。
 
 ## Blink.cmp 用户
 
@@ -815,6 +861,8 @@ return {
 | `:AvanteShowRepoMap`               | 显示项目结构的 repo map                                                                  |                                                     |
 | `:AvanteToggle`                    | 切换 Avante 侧边栏                                                                       |                                                     |
 | `:AvanteModels`                    | 显示模型列表                                                                             |                                                     |
+| `:AvanteClaudeCodeAuth`            | 在终端分屏中登录 Claude Code                                                             |                                                     |
+| `:AvanteClaudeCodeStatus`          | 显示 Claude Code CLI 版本、认证状态、插件与原生命令                                      |                                                     |
 
 ## 高亮组
 

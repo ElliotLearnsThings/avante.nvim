@@ -13,7 +13,14 @@
 --- is therefore disabled for this provider, and the CLI's tool activity is shown
 --- inline in the sidebar.
 ---
---- Authentication is the CLI's own (`claude auth`); no API key is read.
+--- Claude Code's native slash commands, skills and plugins are surfaced too:
+--- the CLI announces them at the start of every turn, they are cached to disk,
+--- and Avante offers them alongside its own. A command Avante does not handle
+--- itself is passed through untouched for the CLI to resolve.
+---
+--- Authentication is the CLI's own (`claude auth`); no API key is read. Use
+--- |:AvanteClaudeCodeAuth| to sign in and |:AvanteClaudeCodeStatus| to inspect
+--- the local installation.
 ---@brief ]]
 
 local Utils = require("avante.utils")
@@ -35,6 +42,50 @@ M.role_map = {
 --- Claude Code session ids, keyed by conversation. See `M.session_key`.
 ---@type table<string, string>
 M._sessions = {}
+
+--- What the running Claude Code install offers: its slash commands, skills,
+--- plugins, MCP servers, tools, model and auth source. Populated from the
+--- `avante_capabilities` event at the start of every turn, and reloaded from
+--- disk at startup so commands are available before the first message.
+---@type table<string, any>
+M._capabilities = {}
+
+--- Where `M._capabilities` is persisted between sessions.
+---@return string
+local function capabilities_cache_path()
+  local dir = vim.fs.joinpath(vim.fn.stdpath("cache"), "avante")
+  vim.fn.mkdir(dir, "p")
+  return vim.fs.joinpath(dir, "claude_code_capabilities.json")
+end
+
+--- Replace the contents of `M._capabilities` in place.
+---
+--- Rebinding the field would break the reference it shares with the provider
+--- table `Providers.__index` builds, leaving that copy permanently empty.
+---@param capabilities table<string, any>
+local function set_capabilities(capabilities)
+  for key in pairs(M._capabilities) do
+    M._capabilities[key] = nil
+  end
+  for key, value in pairs(capabilities) do
+    M._capabilities[key] = value
+  end
+end
+
+--- Load the cached capabilities, if any. Failures are not worth reporting:
+--- the next turn repopulates them.
+function M.load_capabilities()
+  local path = capabilities_cache_path()
+  if vim.fn.filereadable(path) == 0 then return end
+  local ok, decoded = pcall(function() return vim.json.decode(table.concat(vim.fn.readfile(path), "\n")) end)
+  if ok and type(decoded) == "table" then set_capabilities(decoded) end
+end
+
+---@param capabilities table<string, any>
+local function save_capabilities(capabilities)
+  set_capabilities(capabilities)
+  pcall(function() vim.fn.writefile(vim.split(vim.json.encode(capabilities), "\n"), capabilities_cache_path()) end)
+end
 
 --- Absolute path to the bundled Python adapter package's parent directory.
 ---@return string
@@ -120,6 +171,7 @@ function M:setup()
       { once = true }
     )
   end
+  M.load_capabilities()
   require("avante.tokenizers").setup(M.tokenizer_id)
 end
 
@@ -186,6 +238,9 @@ function M:parse_subprocess_args(prompt_opts)
     add_dirs = provider_conf.add_dirs or {},
     mcp_config = provider_conf.mcp_config or {},
     strict_mcp_config = provider_conf.strict_mcp_config or false,
+    plugin_dirs = provider_conf.plugin_dirs or {},
+    plugin_urls = provider_conf.plugin_urls or {},
+    disable_slash_commands = provider_conf.disable_slash_commands or false,
     settings = provider_conf.settings,
     setting_sources = provider_conf.setting_sources,
     agents = provider_conf.agents,
@@ -248,6 +303,12 @@ function M:parse_response(ctx, data_stream, event_state, opts)
   if event_state == "avante_session" then
     -- Remember the CLI session so the next turn can resume instead of replaying.
     if jsn.session_id and ctx.session_key then M._sessions[ctx.session_key] = jsn.session_id end
+    return
+  end
+
+  if event_state == "avante_capabilities" then
+    jsn.type = nil
+    save_capabilities(jsn)
     return
   end
 
@@ -333,6 +394,79 @@ function M:parse_response(ctx, data_stream, event_state, opts)
   elseif event_state == "error" then
     opts.on_stop({ reason = "error", error = jsn.error or jsn })
   end
+end
+
+--- Claude Code's own slash commands, as Avante slash commands.
+---
+--- They carry no callback: Avante passes the text through and the CLI resolves
+--- the command itself. Avante's built-in commands of the same name win, since
+--- those act on the Avante-side conversation.
+---@return AvanteSlashCommand[]
+function M.list_slash_commands()
+  local commands = {}
+  for _, name in ipairs(M._capabilities.slash_commands or {}) do
+    if type(name) == "string" and name ~= "" then
+      table.insert(commands, {
+        name = name,
+        description = "Claude Code: /" .. name,
+        details = "Native Claude Code command, resolved by the CLI",
+      })
+    end
+  end
+  return commands
+end
+
+--- Everything Avante knows about the local Claude Code installation.
+---
+--- Runs the adapter's probe, which only calls CLI subcommands that answer
+--- locally — no turn is started and no tokens are spent.
+---@param timeout? integer Milliseconds to wait; defaults to 30000
+---@return table<string, any> | nil report, string | nil error
+function M.probe(timeout)
+  local provider_conf = P.get_config("claude_code")
+  local cli_path = resolve_cli(provider_conf)
+  if cli_path == nil then return nil, "Claude Code CLI not found" end
+  local python = resolve_python(provider_conf)
+  if python == nil then return nil, "No Python interpreter found" end
+
+  local result = vim
+    .system({ python, "-m", "avante_claude_code", "--probe", "--cli-path", cli_path }, {
+      text = true,
+      cwd = adapter_dir(),
+      env = vim.tbl_extend("force", { PYTHONPATH = adapter_dir() }, provider_conf.env or {}),
+    })
+    :wait(timeout or 30000)
+
+  if result.code ~= 0 then return nil, Utils.trim_spaces(result.stderr or "") end
+  local ok, decoded = pcall(vim.json.decode, result.stdout or "")
+  if not ok then return nil, "could not parse the probe output" end
+  return decoded, nil
+end
+
+--- Whether Claude Code is signed in, and how.
+---@return boolean logged_in, string detail
+function M.auth_status()
+  local report, err = M.probe()
+  if report == nil then return false, err or "probe failed" end
+  local auth = report.auth or {}
+  if not auth.ok then return false, tostring(auth.error or "could not read auth status") end
+  local value = auth.value or {}
+  if not value.loggedIn then return false, "not signed in" end
+  return true, string.format("%s (%s)", value.authMethod or "signed in", value.apiProvider or "unknown provider")
+end
+
+--- Start Claude Code's interactive sign-in flow in a terminal split.
+function M.auth_login()
+  local provider_conf = P.get_config("claude_code")
+  local cli_path = resolve_cli(provider_conf)
+  if cli_path == nil then
+    Utils.error("Claude Code CLI not found. Install it from https://claude.com/claude-code.", { title = "Avante" })
+    return
+  end
+  -- Sign-in is interactive, so it needs a real terminal rather than a job.
+  vim.cmd("botright split")
+  vim.cmd("terminal " .. vim.fn.fnameescape(cli_path) .. " auth login")
+  vim.cmd("startinsert")
 end
 
 ---@return AvanteProviderModelList | nil

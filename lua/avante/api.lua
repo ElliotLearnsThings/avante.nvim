@@ -262,6 +262,41 @@ function M.select_model() require("avante.model_selector").open() end
 
 function M.select_acp_model() require("avante.acp_config_selector").open_model() end
 
+---Start Claude Code's interactive sign-in flow.
+function M.claude_code_auth() require("avante.providers.claude_code").auth_login() end
+
+---Report on the local Claude Code installation: version, auth and plugins.
+function M.claude_code_status()
+  local ClaudeCode = require("avante.providers.claude_code")
+  local report, err = ClaudeCode.probe()
+  if report == nil then
+    require("avante.utils").error("Claude Code: " .. (err or "probe failed"), { title = "Avante" })
+    return
+  end
+
+  local lines = { "Claude Code" }
+  table.insert(lines, "  cli:     " .. tostring(report.cli_path))
+  table.insert(lines, "  version: " .. (report.version and report.version.ok and report.version.value or "unknown"))
+
+  local logged_in, detail = ClaudeCode.auth_status()
+  table.insert(lines, "  auth:    " .. (logged_in and detail or (detail .. " — run :AvanteClaudeCodeAuth")))
+
+  local plugins = report.plugins or {}
+  if plugins.ok and type(plugins.value) == "table" then
+    if #plugins.value == 0 then
+      table.insert(lines, "  plugins: none installed")
+    else
+      local names = vim.tbl_map(function(plugin) return plugin.name or vim.inspect(plugin) end, plugins.value)
+      table.insert(lines, "  plugins: " .. table.concat(names, ", "))
+    end
+  end
+
+  local commands = ClaudeCode._capabilities.slash_commands or {}
+  table.insert(lines, "  commands: " .. (#commands > 0 and #commands .. " available" or "none seen yet"))
+
+  require("avante.utils").info(table.concat(lines, "\n"), { title = "Avante" })
+end
+
 function M.select_acp_mode() require("avante.acp_config_selector").open_mode() end
 
 function M.select_history()

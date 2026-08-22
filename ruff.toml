@@ -44,6 +44,10 @@ quote-style = "double"
 # 缩进风格
 indent-style = "space"
 
+[lint.per-file-ignores]
+# Test modules: bare asserts are the point, and literals read better inline.
+"**/tests/*" = ["S101", "D103", "PLR2004", "INP001"]
+
 [lint.isort]
 # 与 black 兼容的导入排序设置
 combine-as-imports = true

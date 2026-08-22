@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .protocol import AdapterRequest
 
+
 #: Flags that pin the CLI into the machine-readable streaming mode we parse.
 BASE_ARGS: tuple[str, ...] = (
     "--print",
@@ -49,6 +50,18 @@ def build_args(request: AdapterRequest) -> list[str]:
     else:
         _append(args, "--session-id", request.session_id)
 
+    _append_tool_args(args, request)
+    _append_extension_args(args, request)
+
+    if request.max_budget_usd is not None:
+        args.extend(("--max-budget-usd", str(request.max_budget_usd)))
+
+    args.extend(request.extra_args)
+    return args
+
+
+def _append_tool_args(args: list[str], request: AdapterRequest) -> None:
+    """Add the flags governing which built-in tools Claude Code may run."""
     if request.tools is not None:
         # An empty list means "no built-in tools", which the CLI spells as "".
         args.extend(("--tools", ",".join(request.tools) if request.tools else ""))
@@ -57,18 +70,26 @@ def build_args(request: AdapterRequest) -> list[str]:
     if request.disallowed_tools:
         args.extend(("--disallowed-tools", ",".join(request.disallowed_tools)))
 
+
+def _append_extension_args(args: list[str], request: AdapterRequest) -> None:
+    """
+    Add the flags for extra directories, MCP servers, plugins and commands.
+
+    Plugins here are per-session: they layer on top of whatever the user has
+    installed globally with ``claude plugin install``.
+    """
     for directory in request.add_dirs:
         args.extend(("--add-dir", directory))
     for config in request.mcp_config:
         args.extend(("--mcp-config", config))
     if request.strict_mcp_config:
         args.append("--strict-mcp-config")
-
-    if request.max_budget_usd is not None:
-        args.extend(("--max-budget-usd", str(request.max_budget_usd)))
-
-    args.extend(request.extra_args)
-    return args
+    for directory in request.plugin_dirs:
+        args.extend(("--plugin-dir", directory))
+    for url in request.plugin_urls:
+        args.extend(("--plugin-url", url))
+    if request.disable_slash_commands:
+        args.append("--disable-slash-commands")
 
 
 def build_env(request: AdapterRequest) -> dict[str, str]:

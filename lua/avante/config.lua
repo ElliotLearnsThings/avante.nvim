@@ -567,6 +567,13 @@ M._defaults = {
       --- MCP server config files or JSON strings.
       mcp_config = {},
       strict_mcp_config = false,
+      --- Claude Code plugins loaded for this session only, layered on top of
+      --- whatever `claude plugin install` has already put in place.
+      plugin_dirs = {},
+      plugin_urls = {},
+      --- Claude Code's own slash commands are offered in the input buffer
+      --- alongside Avante's. Set true to keep only Avante's.
+      disable_slash_commands = false,
       --- Settings file path or JSON string, and which setting sources to load.
       settings = nil,
       setting_sources = nil,
