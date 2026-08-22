@@ -86,6 +86,24 @@ describe("claude_code provider", function()
 
   local function cache_file() return vim.fs.joinpath(cache_root, "avante", "claude_code_capabilities.json") end
 
+  --- Load a fresh `avante.config` and `avante.providers`, so a test can pick the
+  --- active provider without leaking that choice into the rest of the suite.
+  ---@param opts table
+  ---@return table config
+  local function setup_config(opts)
+    package.loaded["avante.config"] = nil
+    package.loaded["avante.providers"] = nil
+    local fresh = require("avante.config")
+    fresh.get_last_used_model = function() end
+    fresh.setup(opts)
+    return fresh
+  end
+
+  local function forget_config()
+    package.loaded["avante.config"] = nil
+    package.loaded["avante.providers"] = nil
+  end
+
   before_each(function()
     ClaudeCode._sessions = {}
     reset_capabilities()
@@ -753,24 +771,6 @@ describe("claude_code provider", function()
       assert.are.same({}, ClaudeCode.list_slash_commands())
     end)
   end)
-
-  --- Load a fresh `avante.config` and `avante.providers`, so a test can pick the
-  --- active provider without leaking that choice into the rest of the suite.
-  ---@param opts table
-  ---@return table config
-  local function setup_config(opts)
-    package.loaded["avante.config"] = nil
-    package.loaded["avante.providers"] = nil
-    local fresh = require("avante.config")
-    fresh.get_last_used_model = function() end
-    fresh.setup(opts)
-    return fresh
-  end
-
-  local function forget_config()
-    package.loaded["avante.config"] = nil
-    package.loaded["avante.providers"] = nil
-  end
 
   describe("probe and auth", function()
     local real_get_config
