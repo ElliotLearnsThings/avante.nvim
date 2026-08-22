@@ -494,7 +494,7 @@ If both are used, options passed to `setup()` override values from `vim.g.avante
       emit_tool_activity = true, -- Show Claude Code's own tool calls and results in the sidebar
       extra_args = {}, -- Arguments appended verbatim to the CLI invocation
       env = {}, -- Extra environment variables for the CLI
-      timeout = 0, -- Abort the turn after this many seconds. 0 disables the timeout
+      timeout = 0, -- Abort the turn after this many milliseconds. 0 disables the timeout
       context_window = 200000,
       disable_tools = true, -- Claude Code brings its own tools, Avante's would duplicate them
     },
@@ -752,7 +752,7 @@ All of the following live under `providers.claude_code`:
 | `emit_tool_activity` | `boolean`           | Show Claude Code's own tool calls and results in the sidebar. Default `true`.                            |
 | `extra_args`         | `string[]`          | Arguments appended verbatim to the CLI invocation — the escape hatch for anything not modelled here.     |
 | `env`                | `table<string,string>` | Extra environment variables for the CLI process.                                                      |
-| `timeout`            | `number`            | Abort the turn after this many seconds. `0` (the default) disables the timeout.                          |
+| `timeout`            | `number`            | Abort the turn after this many milliseconds. `0` (the default) disables the timeout.                     |
 
 A read-only configuration, for example, looks like this:
 

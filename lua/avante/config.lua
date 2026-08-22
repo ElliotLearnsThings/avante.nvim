@@ -596,7 +596,7 @@ M._defaults = {
       extra_args = {},
       --- Extra environment variables for the CLI.
       env = {},
-      --- Abort the turn after this many seconds. 0 disables the timeout.
+      --- Abort the turn after this many milliseconds. 0 disables the timeout.
       timeout = 0,
       context_window = 200000,
       --- Claude Code brings its own tools; Avante's would duplicate them.

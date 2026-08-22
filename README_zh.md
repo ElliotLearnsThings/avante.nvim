@@ -321,7 +321,7 @@ _请参见 [config.lua#L9](./lua/avante/config.lua) 以获取完整配置_
       emit_tool_activity = true, -- 在侧边栏中显示 Claude Code 自己的工具调用与结果
       extra_args = {}, -- 原样追加到 CLI 调用后面的参数
       env = {}, -- 传给 CLI 的额外环境变量
-      timeout = 0, -- 超过该秒数后中止本轮对话。0 表示不限制
+      timeout = 0, -- 超过该毫秒数后中止本轮对话。0 表示不限制
       context_window = 200000,
       disable_tools = true, -- Claude Code 自带工具，Avante 的工具会重复执行
     },
@@ -550,7 +550,7 @@ Claude Code 会直接拒绝该操作，而不是一直等待。这正是默认�
 | `emit_tool_activity` | `boolean`              | 在侧边栏中显示 Claude Code 自己的工具调用与结果。默认 `true`。                   |
 | `extra_args`         | `string[]`             | 原样追加到 CLI 调用后面的参数——用于承载这里没有建模的一切能力。                  |
 | `env`                | `table<string,string>` | 传给 CLI 进程的额外环境变量。                                                    |
-| `timeout`            | `number`               | 超过该秒数后中止本轮对话。默认 `0`，表示不限制。                                 |
+| `timeout`            | `number`               | 超过该毫秒数后中止本轮对话。默认 `0`，表示不限制。                                 |
 
 例如，一份只读的配置可以这样写：
 
@@ -596,7 +596,7 @@ providers = {
 
 ### 认证
 
-这里没有需要设置的 API key。Claude Code 自己完成认证，avante 直接复用 CLI 已有的会话：
+这里没有需要设置的 API 密钥。Claude Code 自己完成认证，avante 直接复用 CLI 已有的会话：
 
 ```sh
 claude auth login     # 或在 Neovim 中执行 :AvanteClaudeCodeAuth

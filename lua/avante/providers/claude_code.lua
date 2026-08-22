@@ -90,7 +90,8 @@ end
 --- Absolute path to the bundled Python adapter package's parent directory.
 ---@return string
 local function adapter_dir()
-  local this_file = debug.getinfo(1, "S").source:sub(2)
+  -- Normalized first so this works with Windows' backslash separators too.
+  local this_file = vim.fs.normalize(debug.getinfo(1, "S").source:sub(2))
   local plugin_root = this_file:gsub("/lua/avante/providers/claude_code%.lua$", "")
   return vim.fs.joinpath(plugin_root, "py", "claude-code-adapter")
 end
@@ -113,8 +114,8 @@ end
 local function resolve_cli(provider_conf)
   local candidate = provider_conf.cli_path
   if candidate == nil or candidate == "" then candidate = "claude" end
-  -- An explicit absolute path is taken at face value; a bare name is looked up.
-  if candidate:find("/") then return vim.fn.executable(candidate) == 1 and candidate or nil end
+  -- An explicit path is taken at face value; a bare name is looked up on $PATH.
+  if candidate:find("[/\\]") then return vim.fn.executable(candidate) == 1 and candidate or nil end
   local resolved = vim.fn.exepath(candidate)
   return resolved ~= "" and resolved or nil
 end
@@ -249,7 +250,9 @@ function M:parse_subprocess_args(prompt_opts)
     cli_path = cli_path,
     extra_args = provider_conf.extra_args or {},
     env = provider_conf.env or {},
-    timeout = provider_conf.timeout or 0,
+    -- `timeout` is milliseconds across Avante's provider config; the adapter
+    -- works in seconds. 0 means no timeout on both sides.
+    timeout = (provider_conf.timeout or 0) / 1000,
   }, extra_request_body)
 
   return {
