@@ -510,12 +510,12 @@ local parse_headers = function(headers_file)
   return headers
 end
 
----@param opts avante.CurlOpts
-function M.curl(opts)
-  local provider = opts.provider
-  local prompt_opts = opts.prompt_opts
-  local handler_opts = opts.handler_opts
-
+--- Wrap `on_stop` so a terminal stop only ever fires once.
+---
+--- Streaming tool uses are exempt: they legitimately report more than once
+--- before the request finally settles.
+---@param handler_opts AvanteHandlerOptions
+local function latch_on_stop(handler_opts)
   local orig_on_stop = handler_opts.on_stop
   local stopped = false
   ---@param stop_opts AvanteLLMStopCallbackOptions
@@ -526,19 +526,21 @@ function M.curl(opts)
     end
     if orig_on_stop then return orig_on_stop(stop_opts) end
   end
+end
 
-  local spec = provider:parse_curl_args(prompt_opts)
-  if not spec then
-    handler_opts.on_stop({ reason = "error", error = "Provider configuration error" })
-    return
-  end
-
+--- Build the server-sent-event line parser that feeds `provider:parse_response`.
+---
+--- Shared by the curl and subprocess transports, so both providers see exactly
+--- the same `data:` payloads and sticky `event:` state.
+---@param provider AvanteProviderFunctor
+---@param turn_ctx table
+---@param handler_opts AvanteHandlerOptions
+---@return fun(line: string): nil, fun(): string?
+local function make_stream_parser(provider, turn_ctx, handler_opts)
   ---@type string?
   local current_event_state = nil
-  local turn_ctx = {}
-  turn_ctx.turn_id = Utils.uuid()
-
   local response_body = ""
+
   ---@param line string
   local function parse_stream_data(line)
     local event = line:match("^event:%s*(.+)$")
@@ -564,8 +566,140 @@ function M.curl(opts)
     end
   end
 
+  return parse_stream_data, function() return current_event_state end
+end
+
+--- Stream a turn from a local process instead of an HTTP endpoint.
+---
+--- Providers opt in with `transport = "subprocess"` and implement
+--- `parse_subprocess_args` in place of `parse_curl_args`. The process is
+--- expected to write server-sent events on stdout, so everything downstream —
+--- `parse_response`, the agent loop, history, cancellation — behaves exactly as
+--- it does for a curl-backed provider.
+---@param opts avante.CurlOpts
+function M.subprocess(opts)
+  local provider = opts.provider
+  local handler_opts = opts.handler_opts
+
+  latch_on_stop(handler_opts)
+
+  local spec = provider:parse_subprocess_args(opts.prompt_opts)
+  if not spec then
+    handler_opts.on_stop({ reason = "error", error = "Provider configuration error" })
+    return
+  end
+
+  local turn_ctx = vim.tbl_extend("force", {}, spec.ctx or {})
+  turn_ctx.turn_id = Utils.uuid()
+
+  local parse_stream_data = make_stream_parser(provider, turn_ctx, handler_opts)
+
+  local cmd = vim.list_extend({ spec.cmd }, spec.args or {})
+  Utils.debug("subprocess request:", cmd)
+
+  local completed = false
+  local pending = ""
+  local stderr_tail = {}
+
+  --- Split stdout on newlines; the tail is held back until its line completes.
+  ---@param chunk string
+  local function consume(chunk)
+    pending = pending .. chunk
+    while true do
+      local newline = pending:find("\n")
+      if not newline then break end
+      local line = pending:sub(1, newline - 1)
+      pending = pending:sub(newline + 1)
+      if line ~= "" then parse_stream_data(line) end
+    end
+  end
+
+  local handle
+  local started, err = pcall(function()
+    handle = vim.system(cmd, {
+      cwd = spec.cwd,
+      env = spec.env,
+      stdin = spec.stdin or true,
+      stdout = function(stdout_err, data)
+        if stdout_err then
+          if not completed then
+            completed = true
+            vim.schedule(function() handler_opts.on_stop({ reason = "error", error = stdout_err }) end)
+          end
+          return
+        end
+        if not data then return end
+        vim.schedule(function() consume(data) end)
+      end,
+      stderr = function(_, data)
+        if not data or data == "" then return end
+        table.insert(stderr_tail, data)
+        -- Only the tail is useful; the rest is progress chatter.
+        if #stderr_tail > 20 then table.remove(stderr_tail, 1) end
+      end,
+    }, function(result)
+      vim.schedule(function()
+        if pending ~= "" then
+          parse_stream_data(pending)
+          pending = ""
+        end
+        if completed then return end
+        completed = true
+        if result.code ~= 0 then
+          local detail = Utils.trim_spaces(table.concat(stderr_tail, ""))
+          if detail == "" then detail = spec.cmd .. " exited with status " .. tostring(result.code) end
+          handler_opts.on_stop({ reason = "error", error = detail })
+        end
+      end)
+    end)
+  end)
+
+  if not started then
+    local error_msg = vim.inspect(err)
+    Utils.error("Failed to start " .. spec.cmd .. ": " .. error_msg)
+    handler_opts.on_stop({ reason = "error", error = error_msg })
+    return
+  end
+
+  api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = M.CANCEL_PATTERN,
+    once = true,
+    callback = function()
+      if completed then return end
+      completed = true
+      pcall(function() handle:kill("sigterm") end)
+      Utils.debug("subprocess request cancelled")
+      vim.schedule(function() handler_opts.on_stop({ reason = "cancelled" }) end)
+    end,
+  })
+
+  return handle
+end
+
+---@param opts avante.CurlOpts
+function M.curl(opts)
+  local provider = opts.provider
+  local prompt_opts = opts.prompt_opts
+  local handler_opts = opts.handler_opts
+
+  if provider.transport == "subprocess" then return M.subprocess(opts) end
+
+  latch_on_stop(handler_opts)
+
+  local spec = provider:parse_curl_args(prompt_opts)
+  if not spec then
+    handler_opts.on_stop({ reason = "error", error = "Provider configuration error" })
+    return
+  end
+
+  local turn_ctx = {}
+  turn_ctx.turn_id = Utils.uuid()
+
+  local parse_stream_data, current_event_state = make_stream_parser(provider, turn_ctx, handler_opts)
+
   local function parse_response_without_stream(data)
-    provider:parse_response_without_stream(data, current_event_state, handler_opts)
+    provider:parse_response_without_stream(data, current_event_state(), handler_opts)
   end
 
   local completed = false

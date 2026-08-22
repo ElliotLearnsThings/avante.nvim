@@ -245,6 +245,17 @@ vim.g.avante_login = vim.g.avante_login
 ---@class AvanteCurlOutput: {url: string, proxy: string, insecure: boolean, body: table<string, any> | string, headers: table<string, string>, rawArgs: string[] | nil}
 ---@alias AvanteCurlArgsParser fun(self: AvanteProviderFunctor, prompt_opts: AvantePromptOptions): (AvanteCurlOutput | nil)
 ---
+--- One local process to run in place of an HTTP request. Its stdout must be
+--- server-sent events, so `parse_response` sees the same payloads either way.
+---@class AvanteSubprocessOutput
+---@field cmd string Executable to run
+---@field args? string[] Arguments passed to `cmd`
+---@field stdin? string Written to the process, which then sees EOF
+---@field env? table<string, string> Extra environment variables
+---@field cwd? string Working directory for the process
+---@field ctx? table Seeded onto the turn context handed to `parse_response`
+---@alias AvanteSubprocessArgsParser fun(self: AvanteProviderFunctor, prompt_opts: AvantePromptOptions): (AvanteSubprocessOutput | nil)
+---
 ---@alias AvanteResponseParser fun(self: AvanteProviderFunctor, ctx: any, data_stream: string, event_state: string?, opts: AvanteHandlerOptions): nil
 ---
 ---@class AvanteDefaultBaseProvider: table<string, any>
@@ -355,6 +366,8 @@ vim.g.avante_login = vim.g.avante_login
 ---@field parse_messages AvanteMessagesParser
 ---@field parse_response AvanteResponseParser
 ---@field parse_curl_args AvanteCurlArgsParser
+---@field transport? "curl" | "subprocess" Transport used to reach the model; defaults to curl
+---@field parse_subprocess_args? AvanteSubprocessArgsParser Required when `transport` is "subprocess"
 ---@field is_disable_stream fun(self: AvanteProviderFunctor): boolean
 ---@field setup fun(): nil
 ---@field is_env_set fun(): boolean
