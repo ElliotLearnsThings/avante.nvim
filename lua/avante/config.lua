@@ -599,8 +599,16 @@ M._defaults = {
       --- Abort the turn after this many milliseconds. 0 disables the timeout.
       timeout = 0,
       context_window = 200000,
-      --- Claude Code brings its own tools; Avante's would duplicate them.
-      disable_tools = true,
+      --- Which tools the model may reach for:
+      ---   "avante" — Avante's own, executed inside Neovim over the MCP bridge,
+      ---              so the diff review, confirmations, todos, RAG and web
+      ---              search all behave as they always have;
+      ---   "native" — Claude Code's built-ins, which edit files directly;
+      ---   "both"   — both sets, at the cost of overlapping capabilities.
+      tools_mode = "avante",
+      --- Kept in step with `tools_mode`: Avante only builds its tool list when
+      --- something can actually call it.
+      disable_tools = false,
     },
   },
   ---Specify the special dual_boost mode

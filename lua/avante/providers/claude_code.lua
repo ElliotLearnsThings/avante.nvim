@@ -194,6 +194,22 @@ function M:parse_messages(opts)
   return messages
 end
 
+--- Convert one Avante tool into the MCP shape Claude Code expects.
+---@param tool AvanteLLMTool
+---@return table
+local function to_mcp_tool(tool)
+  local properties, required = Utils.llm_tool_param_fields_to_json_schema(tool.param.fields)
+  return {
+    name = tool.name,
+    description = tool.get_description and tool.get_description() or tool.description or tool.name,
+    inputSchema = {
+      type = "object",
+      properties = properties,
+      required = required,
+    },
+  }
+end
+
 ---@param prompt_opts AvantePromptOptions
 ---@return AvanteSubprocessOutput | nil
 function M:parse_subprocess_args(prompt_opts)
@@ -219,6 +235,17 @@ function M:parse_subprocess_args(prompt_opts)
   end
 
   local messages = self:parse_messages(prompt_opts)
+
+  -- Avante's tools are handed to Claude Code over the MCP bridge and executed
+  -- back inside Neovim, so the sidebar keeps its diff review and confirmations.
+  local tools_mode = provider_conf.tools_mode or "native"
+  local avante_tools = {}
+  if tools_mode ~= "native" and prompt_opts.tools then
+    for _, tool in ipairs(prompt_opts.tools) do
+      table.insert(avante_tools, to_mcp_tool(tool))
+    end
+  end
+
   local session_key = M.session_key(prompt_opts.messages)
   local resume = nil
   if provider_conf.stateful ~= false and session_key then resume = M._sessions[session_key] end
@@ -239,6 +266,8 @@ function M:parse_subprocess_args(prompt_opts)
     add_dirs = provider_conf.add_dirs or {},
     mcp_config = provider_conf.mcp_config or {},
     strict_mcp_config = provider_conf.strict_mcp_config or false,
+    avante_tools = avante_tools,
+    tools_mode = tools_mode,
     plugin_dirs = provider_conf.plugin_dirs or {},
     plugin_urls = provider_conf.plugin_urls or {},
     disable_slash_commands = provider_conf.disable_slash_commands or false,
@@ -258,11 +287,13 @@ function M:parse_subprocess_args(prompt_opts)
   return {
     cmd = python,
     args = { "-m", "avante_claude_code" },
-    stdin = vim.json.encode(request),
+    -- The adapter reads this with readline(), then keeps the pipe open.
+    stdin = vim.json.encode(request) .. "\n",
     cwd = adapter_dir(),
     env = vim.tbl_extend("force", { PYTHONPATH = adapter_dir() }, provider_conf.env or {}),
-    -- Seeded onto the turn context so `parse_response` can file the session id.
-    ctx = { session_key = session_key },
+    -- Seeded onto the turn context so `parse_response` can file the session id
+    -- and run a bridged tool call.
+    ctx = { session_key = session_key, tools = prompt_opts.tools or {} },
   }
 end
 
@@ -277,6 +308,112 @@ function M.transform_usage(usage)
     prompt_tokens = input,
     completion_tokens = usage.output_tokens or 0,
   }
+end
+
+--- Strip JSON nulls, which decode to `vim.NIL` and confuse most tools.
+---@param value any
+---@return any
+local function without_nulls(value)
+  if value == vim.NIL then return nil end
+  if type(value) ~= "table" then return value end
+  local cleaned = {}
+  for key, item in pairs(value) do
+    local scrubbed = without_nulls(item)
+    if scrubbed ~= nil then cleaned[key] = scrubbed end
+  end
+  return cleaned
+end
+
+--- Run one tool Claude Code asked for, and answer the adapter.
+---
+--- The call arrives over the MCP bridge, so the tool runs here — inside Neovim,
+--- through Avante's own runner, keeping its confirmations, diff review and
+--- history rendering. The adapter blocks until `ctx.write` answers, so every
+--- path through this function must answer exactly once.
+---@param ctx table Turn context carrying `tools`, `tool_opts`, `turn_id`, `write`
+---@param call {id: string, name: string, input: table}
+---@param opts AvanteHandlerOptions
+function M.handle_tool_call(ctx, call, opts)
+  local LLMTools = require("avante.llm_tools")
+  local Helpers = require("avante.llm_tools.helpers")
+  -- Claude Code namespaces bridged tools; Avante knows them by the bare name,
+  -- and so does the renderer that looks up `avante.llm_tools.<name>`.
+  local name = tostring(call.name or ""):gsub("^mcp__avante__", "")
+  local tool_use = { name = name, id = call.id, input = without_nulls(call.input) or {} }
+
+  -- `is_calling` is not cosmetic: the sidebar only draws the inline permission
+  -- buttons for a message that is generating or calling, so a tool that asks
+  -- for confirmation would otherwise hang with no way to answer it.
+  local use_message = HistoryMessage:new("assistant", {
+    type = "tool_use",
+    id = call.id,
+    name = name,
+    input = tool_use.input,
+  }, { state = "generated", turn_id = ctx.turn_id })
+  use_message.is_calling = true
+  if opts.on_messages_add then opts.on_messages_add({ use_message }) end
+
+  local answered = false
+  ---@param content string
+  ---@param err string | nil
+  local function answer(content, err)
+    if answered then return end
+    answered = true
+    local is_error = err ~= nil
+    local body = is_error and err or content
+    use_message.is_calling = false
+    if opts.on_messages_add then
+      -- Both in one batch: the sidebar caches rendered lines per message, and
+      -- the tool box takes its state from whether a result exists yet.
+      opts.on_messages_add({
+        use_message,
+        HistoryMessage:new("user", {
+          type = "tool_result",
+          tool_use_id = call.id,
+          content = body,
+          is_error = is_error,
+          is_user_declined = is_error and body:match("^User declined") ~= nil,
+        }, { turn_id = ctx.turn_id }),
+      })
+    end
+    if ctx.write then
+      ctx.write(vim.json.encode({
+        type = "tool_result",
+        id = call.id,
+        content = is_error and vim.NIL or body,
+        error = is_error and body or vim.NIL,
+      }) .. "\n")
+    end
+  end
+
+  local tool_opts = ctx.tool_opts or {}
+  local ok, result, err = pcall(LLMTools.process_tool_use, ctx.tools or {}, tool_use, {
+    -- One session_ctx for the whole turn: "allow always", viewed-file tracking
+    -- and the streaming-diff bookkeeping all live on it.
+    session_ctx = tool_opts.session_ctx or {},
+    on_log = tool_opts.on_log,
+    set_tool_use_store = tool_opts.set_tool_use_store,
+    tool_use_id = call.id,
+    on_complete = function(async_result, async_err)
+      if async_err == Helpers.CANCEL_TOKEN then
+        answer("", "Tool call cancelled")
+        return
+      end
+      answer(async_result or "", async_err)
+    end,
+  })
+
+  if not ok then
+    answer("", "Tool failed: " .. tostring(result))
+    return
+  end
+  if err == Helpers.CANCEL_TOKEN then
+    answer("", "Tool call cancelled")
+    return
+  end
+  -- A synchronous tool returns its answer here instead of via on_complete.
+  -- Errors can arrive with a non-nil result, so the error decides.
+  if result ~= nil or err ~= nil then answer(result or "", err) end
 end
 
 function M:parse_response(ctx, data_stream, event_state, opts)
@@ -306,6 +443,11 @@ function M:parse_response(ctx, data_stream, event_state, opts)
   if event_state == "avante_session" then
     -- Remember the CLI session so the next turn can resume instead of replaying.
     if jsn.session_id and ctx.session_key then M._sessions[ctx.session_key] = jsn.session_id end
+    return
+  end
+
+  if event_state == "avante_tool_call" then
+    M.handle_tool_call(ctx, jsn, opts)
     return
   end
 

@@ -298,7 +298,13 @@ function Prompt.get_templates_dir(project_root)
     local win_path = vim.fs.abspath(tostring(directory)):gsub("^%a:", ""):gsub("^[/\\]+", "")
     directory = Path:new(vim.fs.normalize(win_path))
   end
-  local cache_prompt_dir = Path:new(P.cache_path):joinpath(directory)
+  -- Without a cache path, `Path:new(nil):joinpath(directory)` collapses to the
+  -- project itself and the built-in templates get copied into the user's
+  -- source tree — where the next run reads them back as custom rules and the
+  -- prompt fails to render. Fall back rather than scribble.
+  local cache_root = P.cache_path
+  if cache_root == nil or cache_root == "" then cache_root = vim.fs.joinpath(vim.fn.stdpath("cache"), "avante") end
+  local cache_prompt_dir = Path:new(cache_root):joinpath(directory)
   local cache_dir_str = tostring(cache_prompt_dir):gsub("\\", "/")
   if vim.fn.isdirectory(cache_dir_str) == 0 then vim.fn.mkdir(cache_dir_str, "p") end
 

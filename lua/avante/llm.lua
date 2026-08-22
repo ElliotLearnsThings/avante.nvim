@@ -583,6 +583,10 @@ end
 --- expected to write server-sent events on stdout, so everything downstream —
 --- `parse_response`, the agent loop, history, cancellation — behaves exactly as
 --- it does for a curl-backed provider.
+---
+--- The channel is bidirectional. `spec.stdin` is written first, then the pipe
+--- stays open and `ctx.write` lets `parse_response` answer the process while
+--- the turn is still running — which is how tool calls are served back.
 ---@param opts avante.CurlOpts
 function M.subprocess(opts)
   local provider = opts.provider
@@ -598,6 +602,7 @@ function M.subprocess(opts)
 
   local turn_ctx = vim.tbl_extend("force", {}, spec.ctx or {})
   turn_ctx.turn_id = Utils.uuid()
+  turn_ctx.tool_opts = opts.tool_opts or {}
 
   local parse_stream_data = make_stream_parser(provider, turn_ctx, handler_opts)
 
@@ -626,7 +631,9 @@ function M.subprocess(opts)
     handle = vim.system(cmd, {
       cwd = spec.cwd,
       env = spec.env,
-      stdin = spec.stdin or true,
+      -- Kept open rather than closed after the request: the process may ask
+      -- questions mid-turn, and `ctx.write` answers them.
+      stdin = true,
       stdout = function(stdout_err, data)
         if stdout_err then
           if not completed then
@@ -667,6 +674,15 @@ function M.subprocess(opts)
     handler_opts.on_stop({ reason = "error", error = error_msg })
     return
   end
+
+  --- Send a line to the process. Safe to call after it has exited.
+  ---@param line string
+  turn_ctx.write = function(line)
+    if completed then return end
+    pcall(function() handle:write(line) end)
+  end
+
+  if spec.stdin then turn_ctx.write(spec.stdin) end
 
   api.nvim_create_autocmd("User", {
     group = group,
@@ -2179,6 +2195,13 @@ function M._stream(opts)
     provider = provider,
     prompt_opts = prompt_opts,
     handler_opts = handler_opts,
+    -- A subprocess provider may run Avante's tools itself; these are what
+    -- `handle_next_tool_use` would have passed to `process_tool_use`.
+    tool_opts = {
+      session_ctx = opts.session_ctx,
+      on_log = opts.on_tool_log,
+      set_tool_use_store = opts.set_tool_use_store,
+    },
     on_response_headers = function(headers) resp_headers = headers end,
   })
 end

@@ -31,7 +31,9 @@ describe("config", function()
     assert.are.same("claude", claude_code.cli_path)
     assert.are.same("acceptEdits", claude_code.permission_mode)
     assert.is_true(claude_code.stateful)
-    assert.is_true(claude_code.disable_tools)
+    -- Avante's own tools run over the MCP bridge, so they are built and sent.
+    assert.are.same("avante", claude_code.tools_mode)
+    assert.is_false(claude_code.disable_tools)
   end)
 
   it("loads setup options from vim.g.avante", function()
@@ -72,7 +74,7 @@ describe("config", function()
     -- Untouched defaults are kept rather than replaced wholesale.
     assert.are.same("claude", claude_code.cli_path)
     assert.are.same({ "opus", "sonnet", "haiku" }, claude_code.model_names)
-    assert.is_true(claude_code.disable_tools)
+    assert.are.same("avante", claude_code.tools_mode)
   end)
 
   it("lets explicit setup options override vim.g.avante", function()

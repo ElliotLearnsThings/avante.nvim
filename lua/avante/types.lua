@@ -217,6 +217,7 @@ vim.g.avante_login = vim.g.avante_login
 ---@field cli_path? string The `claude` executable; a bare name is looked up on $PATH
 ---@field python_path? string Python 3.9+ interpreter for the adapter; auto-detected when nil
 ---@field permission_mode? "acceptEdits" | "plan" | "bypassPermissions" | "manual" | "dontAsk" | "auto"
+---@field tools_mode? "avante" | "native" | "both" Whose tools the model may call
 ---@field tools? string[] Built-in tools Claude Code may use; an empty table disables all of them
 ---@field allowed_tools? string[]
 ---@field disallowed_tools? string[]
@@ -494,6 +495,7 @@ vim.g.avante_login = vim.g.avante_login
 ---@field provider AvanteProviderFunctor
 ---@field prompt_opts AvantePromptOptions
 ---@field handler_opts AvanteHandlerOptions
+---@field tool_opts? {session_ctx: table, on_log: function, set_tool_use_store: function} For subprocess providers that run Avante's tools themselves
 ---@field on_response_headers? fun(headers: table<string, string>): nil
 ---
 ---@class avante.lsp.Definition

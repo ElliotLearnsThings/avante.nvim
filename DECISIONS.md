@@ -80,7 +80,44 @@ final `result` record.
 
 ---
 
-## 4. Tools: Claude Code keeps its own
+## 4. Tools: bridged back into Neovim over MCP
+
+**Decision.** Avante's own tools run again — inside Neovim, through Avante's
+runner — while Claude Code drives the turn. `tools_mode` picks whose tools the
+model may call: `"avante"` (the default), `"native"`, or `"both"`.
+
+Claude Code spawns an MCP server that holds no tool logic; it proxies
+`tools/list` and `tools/call` across a Unix socket to the adapter, which emits
+an `avante_tool_call` event and blocks until Neovim answers on stdin.
+
+```
+claude --stdio--> mcp_server --socket--> adapter --stdout--> Neovim
+                                                 <--stdin---
+```
+
+This is what makes the plugin behave like Avante again: the diff review,
+inline permission buttons, todos container, RAG search and web search are all
+just tools, and they all work once a tool can be called.
+
+**Two things the bridge must get right**, both learned the hard way:
+
+The `tool_use` history message has to be emitted with `is_calling = true`
+*before* the tool runs. The sidebar only draws the inline permission buttons for
+a message that is generating or calling, so without it a tool that asks for
+confirmation hangs with no way to answer — until the bridge's timeout.
+
+The cleared `tool_use` message and its `tool_result` must be emitted in one
+`on_messages_add` batch. The sidebar caches rendered lines per message, and the
+tool box takes its state from whether a result exists yet, so repainting between
+the two freezes the box as "generating" forever.
+
+**Superseded.** The original design let Claude Code keep its own tools and
+disabled Avante's, because Avante's tool loop is request-scoped while the CLI
+owns its loop. Reconciling them looked like it meant reimplementing ACP. The MCP
+bridge is the third option that was missed: the CLI keeps its loop, and Avante's
+tools are simply reachable from inside it.
+
+## 4b. What keeping the CLI's own tools would have meant
 
 **Decision.** Claude Code executes its own tools (Read, Edit, Write, Bash, Grep,
 …). Avante's tool runner is **disabled** for this provider, and avante's tool
