@@ -1,7 +1,0 @@
-{% if system_info -%}
-====
-
-SYSTEM INFORMATION
-
-{{system_info}}
-{%- endif %}

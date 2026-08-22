@@ -57,3 +57,10 @@ target
 
 # Test dependencies cloned by scripts/setup-deps.sh
 /deps/
+
+# Prompt templates avante copies into the project root at runtime.
+# The originals live in lua/avante/templates/.
+/*.avanterules
+
+# The adapter has no dependencies; a lockfile would only imply otherwise.
+py/claude-code-adapter/uv.lock
