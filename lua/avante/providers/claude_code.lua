@@ -224,7 +224,9 @@ end
 ---@param tool AvanteLLMTool
 ---@return table
 local function to_mcp_tool(tool)
-  local properties, required = Utils.llm_tool_param_fields_to_json_schema(tool.param.fields)
+  -- A custom tool may declare no parameters at all; MCP still wants an object.
+  local fields = tool.param and tool.param.fields or {}
+  local properties, required = Utils.llm_tool_param_fields_to_json_schema(fields)
   return {
     name = tool.name,
     description = tool.get_description and tool.get_description() or tool.description or tool.name,
