@@ -1,5 +1,3 @@
-local Providers = require("avante.providers")
-local Config = require("avante.config")
 local Utils = require("avante.utils")
 local Base = require("avante.llm_tools.base")
 local History = require("avante.history")
@@ -12,11 +10,6 @@ local M = setmetatable({}, Base)
 M.name = "dispatch_agent"
 
 M.get_description = function()
-  local provider = Providers[Config.provider]
-  if Config.provider:match("copilot") and provider.model and provider.model:match("gpt") then
-    return [[Launch a new agent that has access to the following tools: `glob`, `grep`, `ls`, `view`, `attempt_completion`. When you are searching for a keyword or file and are not confident that you will find the right match on the first try, use the Agent tool to perform the search for you.]]
-  end
-
   return [[Launch a new agent that has access to the following tools: `glob`, `grep`, `ls`, `view`, `attempt_completion`. When you are searching for a keyword or file and are not confident that you will find the right match on the first try, use the Agent tool to perform the search for you. For example:
 
 - If you are searching for a keyword like "config" or "logger", the Agent tool is appropriate

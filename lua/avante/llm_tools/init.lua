@@ -43,7 +43,7 @@
 --->
 ---   require("avante").setup({
 ---     providers = {
----       claude = {
+---       claude_code = {
 ---         disable_tools = true,
 ---       },
 ---     },

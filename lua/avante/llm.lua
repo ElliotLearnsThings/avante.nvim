@@ -711,32 +711,16 @@ function M.curl(opts)
   local resp_body_file = temp_file .. "-response-body.txt"
   local headers_file = temp_file .. "-response-headers.txt"
 
-  -- Check if this is a multipart form request (specifically for watsonx)
-  local is_multipart_form = spec.headers and spec.headers["Content-Type"] == "multipart/form-data"
-  local curl_options
-
-  if is_multipart_form then
-    -- For multipart form data, use the form parameter
-    -- spec.body should be a table with form field data
-    curl_options = {
-      headers = spec.headers,
-      proxy = spec.proxy,
-      insecure = spec.insecure,
-      form = spec.body,
-      raw = spec.rawArgs,
-    }
-  else
-    -- For regular JSON requests, encode as JSON and write to file
-    local json_content = vim.json.encode(spec.body)
-    fn.writefile(vim.split(json_content, "\n"), curl_body_file)
-    curl_options = {
-      headers = spec.headers,
-      proxy = spec.proxy,
-      insecure = spec.insecure,
-      body = curl_body_file,
-      raw = spec.rawArgs,
-    }
-  end
+  -- Encode the request body as JSON and write it to file
+  local json_content = vim.json.encode(spec.body)
+  fn.writefile(vim.split(json_content, "\n"), curl_body_file)
+  local curl_options = {
+    headers = spec.headers,
+    proxy = spec.proxy,
+    insecure = spec.insecure,
+    body = curl_body_file,
+    raw = spec.rawArgs,
+  }
 
   Utils.debug("curl request body file:", curl_body_file)
   Utils.debug("curl response body file:", resp_body_file)
@@ -852,16 +836,6 @@ function M.curl(opts)
             completed = true
             parse_response_without_stream(result.body)
           end)
-        end
-
-        if result.status == 200 and spec.url:match("https://openrouter.ai") then
-          local content_type = headers_map["content-type"]
-          if content_type and content_type:match("text/html") then
-            handler_opts.on_stop({
-              reason = "error",
-              error = "Your openrouter endpoint setting is incorrect, please set it to https://openrouter.ai/api/v1",
-            })
-          end
         end
       end,
     })

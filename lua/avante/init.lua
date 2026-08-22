@@ -11,8 +11,9 @@
 --- - One-command application of suggested changes.
 --- - Project-specific instruction files with `avante.md`.
 --- - Agentic mode with tool use.
---- - ACP integration for agents such as Gemini CLI, Claude Code, Goose, Codex,
----   and Kimi CLI.
+--- - The native Claude Code CLI as its model provider.
+--- - ACP integration for other agents such as Gemini CLI, Goose, Codex, and
+---   Kimi CLI.
 --- - Optional RAG service and web-search tools.
 ---
 ---@brief ]]
@@ -50,7 +51,7 @@
 ---@tag avante-zen-mode
 ---@brief [[
 ---This is an era of Coding Agent CLIs. Allegedly "editors are no longer needed": you only need to use the CLI in the terminal. But have people realized that for more than half a century, Terminal-based Editors have solved and standardized the biggest problem with Terminal-based applications — that is, the awkward TUI interactions! No matter how much these Coding Agent CLIs optimize their UI/UX, their UI/UX will always be a subset of Terminal-based Editors (Vim, Emacs)! They cannot achieve Vim’s elegant action + text objects abstraction (imagine how you usually edit large multi-line prompts in an Agent CLI), nor can they leverage thousands of mature Vim/Neovim plugins to help optimize TUI UI/UX—such as easymotions and so on. Moreover, when they want to view or modify code, they often have to jump into other applications which forcibly interrupts the UI/UX experience.
----Therefore, Avante’s Zen Mode was born! It looks like a Vibe Coding Agent CLI but it is completely Neovim underneath. So you can use your muscle-memory Vim operations and those rich and mature Neovim plugins on it. At the same time, by leveraging [ACP](https://github.com/yetone/avante.nvim#acp-support) it has all capabilities of claude code / gemini-cli / codex! Why not enjoy both?
+---Therefore, Avante’s Zen Mode was born! It looks like a Vibe Coding Agent CLI but it is completely Neovim underneath. So you can use your muscle-memory Vim operations and those rich and mature Neovim plugins on it. At the same time, it drives the native Claude Code CLI directly, and via [ACP](https://github.com/yetone/avante.nvim#acp-support) it can reach gemini-cli / codex too! Why not enjoy both?
 ---Now all you need to do is alias this command to avante; then every time you simply type avante just like using claude code and enter Avante’s Zen Mode!
 ---@brief ]]
 ---@mod avante

@@ -59,8 +59,9 @@ M.func = vim.schedule_wrap(function(input, opts)
   if not input.code_edit then return false, "code_edit not provided" end
   local on_complete = opts.on_complete
   if not on_complete then return false, "on_complete not provided" end
-  local provider = Providers["morph"]
-  if not provider then return false, "morph provider not found" end
+  -- `Providers.__index` raises for an unknown provider, so guard the lookup.
+  local ok_provider, provider = pcall(function() return Providers["morph"] end)
+  if not ok_provider or not provider then return false, "morph provider not found" end
   if not provider.is_env_set() then return false, "morph provider not set" end
 
   if not input.path then return false, "path not provided" end

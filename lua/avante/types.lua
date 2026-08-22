@@ -134,10 +134,6 @@ vim.g.avante_login = vim.g.avante_login
 ---@field tools? AvanteLLMTool[]
 ---@field pending_compaction_history_messages? AvanteLLMMessage[]
 ---
----@class AvanteGeminiMessage
----@field role "user"
----@field parts { text: string }[]
----
 ---@class AvanteClaudeMessageContentBaseItem
 ---@field cache_control {type: "ephemeral"}?
 ---
@@ -168,77 +164,7 @@ vim.g.avante_login = vim.g.avante_login
 ---@field description string
 ---@field enum? string[]
 ---
----@class AvanteOpenAIChatResponse
----@field id string
----@field object "chat.completion" | "chat.completion.chunk"
----@field created integer
----@field model string
----@field system_fingerprint string
----@field choices? AvanteOpenAIResponseChoice[] | AvanteOpenAIResponseChoiceComplete[]
----@field usage {prompt_tokens: integer, completion_tokens: integer, total_tokens: integer}
----
----@class AvanteOpenAIResponseChoice
----@field index integer
----@field delta AvanteOpenAIMessage
----@field logprobs? integer
----@field finish_reason? "stop" | "length"
----
----@class AvanteOpenAIResponseChoiceComplete
----@field message AvanteOpenAIMessage
----@field finish_reason "stop" | "length" | "eos_token"
----@field index integer
----@field logprobs integer
----
----@class AvanteOpenAIMessageToolCallFunction
----@field name string
----@field arguments string
----
----@class AvanteOpenAIMessageToolCall
----@field index integer
----@field id string
----@field type "function"
----@field function AvanteOpenAIMessageToolCallFunction
----
----@class AvanteOpenAIMessage
----@field role? "user" | "system" | "assistant"
----@field content? string
----@field reasoning_content? string
----@field reasoning? string
----@field tool_calls? AvanteOpenAIMessageToolCall[]
----@field type? "reasoning" | "function_call" | "function_call_output"
----@field id? string
----@field encrypted_content? string
----@field summary? string
----@field call_id? string
----@field name? string
----@field arguments? string
----@field output? string
----
----@class AvanteOpenAITool
----@field type "function"
----@field function? AvanteOpenAIToolFunction
----@field name? string
----@field description? string | nil
----@field parameters? AvanteOpenAIToolFunctionParameters | nil
----@field strict? boolean | nil
----
----@class AvanteOpenAIToolFunction
----@field name string
----@field description string | nil
----@field parameters AvanteOpenAIToolFunctionParameters | nil
----@field strict boolean | nil
----
----@class AvanteOpenAIToolFunctionParameters
----@field type "object"
----@field properties table<string, AvanteOpenAIToolFunctionParameterProperty>
----@field required string[]
----@field additionalProperties boolean
----
----@class AvanteOpenAIToolFunctionParameterProperty
----@field type string
----@field description string
----
----@alias AvanteChatMessage AvanteClaudeMessage | AvanteOpenAIMessage | AvanteGeminiMessage
+---@alias AvanteChatMessage AvanteClaudeMessage
 ---
 ---@alias AvanteMessagesParser fun(self: AvanteProviderFunctor, opts: AvantePromptOptions): AvanteChatMessage[]
 ---
@@ -259,7 +185,7 @@ vim.g.avante_login = vim.g.avante_login
 ---@alias AvanteResponseParser fun(self: AvanteProviderFunctor, ctx: any, data_stream: string, event_state: string?, opts: AvanteHandlerOptions): nil
 ---
 ---@class AvanteDefaultBaseProvider: table<string, any>
----@field endpoint string Endpoint (e.g. "https://api.mistral.ai/v1")
+---@field endpoint? string Endpoint of an HTTP provider (e.g. "https://api.anthropic.com")
 ---@field extra_request_body? table<string, any>
 ---@field model? string
 ---@field model_names? string[] a list of model to choose from
@@ -285,21 +211,35 @@ vim.g.avante_login = vim.g.avante_login
 ---@field __inherited_from? string
 ---@field display_name? string
 ---
----@class avante.OpenAITokenUsage
----@field total_tokens number
----@field prompt_tokens number
----@field completion_tokens number
----@field prompt_tokens_details {cached_tokens: number}
+--- Configuration for the native Claude Code CLI provider. Every field below is
+--- forwarded to the Python adapter, which turns it into CLI flags.
+---@class AvanteClaudeCodeProvider: AvanteSupportedProvider
+---@field cli_path? string The `claude` executable; a bare name is looked up on $PATH
+---@field python_path? string Python 3.9+ interpreter for the adapter; auto-detected when nil
+---@field permission_mode? "acceptEdits" | "plan" | "bypassPermissions" | "manual" | "dontAsk" | "auto"
+---@field tools? string[] Built-in tools Claude Code may use; an empty table disables all of them
+---@field allowed_tools? string[]
+---@field disallowed_tools? string[]
+---@field add_dirs? string[] Extra directories Claude Code is allowed to touch
+---@field mcp_config? string[] MCP server config files or JSON strings
+---@field strict_mcp_config? boolean Ignore MCP servers outside `mcp_config`
+---@field settings? string Settings file path or JSON string
+---@field setting_sources? string Comma-separated list of "user", "project", "local"
+---@field agents? string Custom agent definitions, as a JSON string
+---@field effort? "low" | "medium" | "high" | "xhigh" | "max"
+---@field fallback_model? string Model to fall back to when the primary one is overloaded
+---@field max_budget_usd? number Spend ceiling for a single turn
+---@field cwd? string Directory Claude Code runs in; defaults to the project root
+---@field stateful? boolean Resume the CLI session between turns instead of replaying
+---@field emit_tool_activity? boolean Show Claude Code's own tool calls in the sidebar
+---@field extra_args? string[] Arguments appended verbatim to the CLI invocation
+---@field env? table<string, string> Extra environment variables for the CLI
 ---
 ---@class avante.AnthropicTokenUsage
 ---@field input_tokens number
 ---@field cache_creation_input_tokens number
 ---@field cache_read_input_tokens number
 ---@field output_tokens number
----
----@class avante.GeminiTokenUsage
----@field promptTokenCount number
----@field candidatesTokenCount number
 ---
 ---@class avante.LLMTokenUsage
 ---@field prompt_tokens number
@@ -378,25 +318,19 @@ vim.g.avante_login = vim.g.avante_login
 ---@field parse_api_key fun(): string | nil
 ---@field parse_stream_data? AvanteStreamParser
 ---@field on_error? fun(result: table<string, any>): nil
----@field transform_tool? fun(self: AvanteProviderFunctor, tool: AvanteLLMTool, use_prefix?: boolean): AvanteOpenAITool | AvanteClaudeTool
+---@field transform_tool? fun(self: AvanteProviderFunctor, tool: AvanteLLMTool, use_prefix?: boolean): AvanteClaudeTool
 ---@field get_rate_limit_sleep_time? fun(self: AvanteProviderFunctor, headers: table<string, string>): integer | nil
 ---@field list_models? fun(self): AvanteProviderModelList | nil
 ---
----@alias AvanteBedrockPayloadBuilder fun(self: AvanteBedrockModelHandler | AvanteBedrockProviderFunctor, prompt_opts: AvantePromptOptions, request_body: table<string, any>): table<string, any>
----
----@class AvanteBedrockProviderFunctor: AvanteProviderFunctor
----@field load_model_handler fun(): AvanteBedrockModelHandler
----@field build_bedrock_payload? AvanteBedrockPayloadBuilder
----
----@class AvanteBedrockModelHandler : AvanteProviderFunctor
----@field role_map table<"user" | "assistant", string>
----@field parse_messages AvanteMessagesParser
----@field parse_response AvanteResponseParser
----@field build_bedrock_payload AvanteBedrockPayloadBuilder
----
----@class AvanteClaudeProviderFunctor: AvanteProviderFunctor
----@field is_temperature_unsupported fun(string): boolean
----@field transform_anthropic_usage any
+--- The native Claude Code CLI provider. Reached over the subprocess transport
+--- rather than curl, so it implements `parse_subprocess_args` in place of
+--- `parse_curl_args`.
+---@class AvanteClaudeCodeProviderFunctor: AvanteProviderFunctor
+---@field transport "subprocess"
+---@field parse_subprocess_args AvanteSubprocessArgsParser
+---@field session_key fun(messages: AvanteLLMMessage[]): string | nil
+---@field transform_usage fun(usage: table | nil): avante.LLMTokenUsage | nil
+---@field _sessions table<string, string> Claude Code session ids, keyed by conversation
 ---
 ---@class AvanteACPProvider
 ---@field command string
@@ -434,7 +368,7 @@ vim.g.avante_login = vim.g.avante_login
 ---@class AvanteGeneratePromptsOptions: AvanteTemplateOptions
 ---@field instructions? string
 ---@field mode? AvanteLlmMode
----@field provider AvanteProviderFunctor | AvanteBedrockProviderFunctor | nil
+---@field provider AvanteProviderFunctor | nil
 ---@field tools? AvanteLLMTool[]
 ---@field original_code? string
 ---@field update_snippets? string[]

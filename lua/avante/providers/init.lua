@@ -1,22 +1,16 @@
 ---@mod avante-providers Model providers
 ---@brief [[
---- Avante ships with default providers and supports custom providers.
+--- Avante ships with a single built-in provider, `claude_code`, and supports
+--- custom providers.
 ---
---- Common provider names include:
+--- Rather than talking to an HTTP API, `claude_code` drives the native Claude
+--- Code CLI through a small Python adapter, which re-emits the CLI's output as
+--- Anthropic Messages API events. See |avante-providers-claude_code|.
 ---
---- - `claude`
---- - `openai`
---- - `azure`
---- - `gemini`
---- - `vertex`
---- - `cohere`
---- - `copilot`
---- - `bedrock`
---- - `ollama`
---- - `watsonx_code_assistant`
---- - `mistral`
---- - ...
---- Please refer to the provider's help section under the tag avante-providers-NAME
+--- Custom providers are still supported: give your provider an
+--- `__inherited_from` attribute naming the provider it derives from, or a
+--- custom `parse_curl_args` function. For more details, see:
+--- https://github.com/yetone/avante.nvim/wiki/Custom-providers
 ---@brief ]]
 
 local api = vim.api
@@ -25,17 +19,7 @@ local Config = require("avante.config")
 local Utils = require("avante.utils")
 
 ---@class avante.Providers
----@field azure AvanteProviderFunctor
----@field bedrock AvanteBedrockProviderFunctor
----@field claude AvanteClaudeProviderFunctor
----@field cohere AvanteProviderFunctor
----@field copilot AvanteProviderFunctor
----@field gemini AvanteProviderFunctor
----@field mistral AvanteProviderFunctor
----@field ollama AvanteProviderFunctor
----@field openai AvanteProviderFunctor
----@field vertex_claude AvanteProviderFunctor
----@field watsonx_code_assistant AvanteProviderFunctor
+---@field claude_code AvanteClaudeCodeProviderFunctor
 local M = {}
 
 ---@class EnvironmentHandler
@@ -45,10 +29,10 @@ local E = {}
 ---@type table<string, string>
 E.cache = {}
 
----@param Opts AvanteSupportedProvider | AvanteProviderFunctor | AvanteBedrockProviderFunctor
+---@param Opts AvanteSupportedProvider | AvanteProviderFunctor
 ---@return string | nil
 function E.parse_envvar(Opts)
-  -- First try the scoped version (e.g., AVANTE_ANTHROPIC_API_KEY)
+  -- First try the scoped version (e.g., MY_PROVIDER_API_KEY -> AVANTE_MY_PROVIDER_API_KEY)
   local scoped_key_name = nil
   if Opts.api_key_name and type(Opts.api_key_name) == "string" and Opts.api_key_name ~= "" then
     -- Only add AVANTE_ prefix if it's a regular environment variable (not a cmd: or already prefixed)
@@ -78,7 +62,7 @@ end
 
 --- initialize the environment variable for current neovim session.
 --- This will only run once and spawn a UI for users to input the envvar.
----@param opts {refresh: boolean, provider: AvanteProviderFunctor | AvanteBedrockProviderFunctor}
+---@param opts {refresh: boolean, provider: AvanteProviderFunctor}
 ---@private
 function E.setup(opts)
   opts.provider.setup()
@@ -227,7 +211,7 @@ function M.setup()
 
   if Config.acp_providers[Config.provider] then return end
 
-  ---@type AvanteProviderFunctor | AvanteBedrockProviderFunctor
+  ---@type AvanteProviderFunctor
   local provider = M[Config.provider]
 
   E.setup({ provider = provider })
@@ -254,7 +238,7 @@ function M.refresh(provider_name)
   if Config.acp_providers[provider_name] then
     Config.provider = provider_name
   else
-    ---@type AvanteProviderFunctor | AvanteBedrockProviderFunctor
+    ---@type AvanteProviderFunctor
     local p = M[Config.provider]
     E.setup({ provider = p, refresh = true })
   end
@@ -263,7 +247,7 @@ function M.refresh(provider_name)
   Utils.info("Switch to provider: " .. provider_name, { once = true, title = "Avante" })
 end
 
----@param opts AvanteProvider | AvanteSupportedProvider | AvanteAnthropicProvider | AvanteProviderFunctor | AvanteBedrockProviderFunctor
+---@param opts AvanteProvider | AvanteSupportedProvider | AvanteClaudeCodeProvider | AvanteProviderFunctor
 ---@return AvanteDefaultBaseProvider provider_opts
 ---@return table<string, any> request_body
 function M.parse_config(opts)

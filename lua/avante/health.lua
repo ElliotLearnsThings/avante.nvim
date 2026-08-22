@@ -55,17 +55,52 @@ function M.check()
     H.ok("Using native input provider (no additional dependencies required)")
   end
 
-  -- Check Copilot if configured
-  if Config.provider and Config.provider == "copilot" then
-    if Utils.has("copilot.lua") or Utils.has("copilot.vim") or Utils.has("copilot") then
-      H.ok("Found Copilot plugin")
-    else
-      H.error("Copilot provider is configured but neither copilot.lua nor copilot.vim is installed")
-    end
-  end
+  -- Check the Claude Code CLI and the Python interpreter its adapter needs
+  M.check_claude_code()
 
   -- Check TreeSitter dependencies
   M.check_treesitter()
+end
+
+-- Check the Claude Code CLI and the Python interpreter running its adapter
+function M.check_claude_code()
+  local provider_conf = (Config.providers and Config.providers.claude_code) or {}
+
+  local cli = provider_conf.cli_path
+  if cli == nil or cli == "" then cli = "claude" end
+  local cli_path = vim.fn.exepath(cli)
+  if cli_path == "" and vim.fn.executable(cli) == 1 then cli_path = cli end
+  if cli_path ~= "" then
+    H.ok(string.format("Found Claude Code CLI: %s", cli_path))
+  else
+    H.error(
+      string.format(
+        "Claude Code CLI not found: %s. Install it from https://claude.com/claude-code, or set providers.claude_code.cli_path",
+        cli
+      )
+    )
+  end
+
+  local python = provider_conf.python_path
+  if python ~= nil and python ~= "" then
+    local resolved = vim.fn.exepath(python)
+    if resolved == "" and vim.fn.executable(python) == 1 then resolved = python end
+    if resolved ~= "" then
+      H.ok(string.format("Found Python interpreter: %s", resolved))
+    else
+      H.error(string.format("Configured providers.claude_code.python_path is not executable: %s", python))
+    end
+    return
+  end
+
+  for _, candidate in ipairs({ "python3", "python" }) do
+    local resolved = vim.fn.exepath(candidate)
+    if resolved ~= "" then
+      H.ok(string.format("Found Python interpreter: %s", resolved))
+      return
+    end
+  end
+  H.warn("No Python 3 interpreter found (tried python3, python). Set providers.claude_code.python_path")
 end
 
 -- Check TreeSitter functionality and parsers

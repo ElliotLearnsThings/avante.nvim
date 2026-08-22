@@ -16,14 +16,15 @@
 --- Supported ACP agents include:
 ---
 --- - Gemini CLI
---- - Claude Code
 --- - Goose
 --- - Codex
 --- - Kimi CLI
+---
+--- Claude Code is not in this list: Avante drives its native CLI directly
+--- through the `claude_code` provider, which supersedes the ACP shim.
 ---Before using ACP agents, ensure you have the required tools installed:
 ---
 ---- **For Gemini CLI**: Install the `gemini` CLI tool and set your `GEMINI_API_KEY`
----- **For Claude Code**: Install the `acp-claude-code` package via npm and set your `ANTHROPIC_API_KEY`
 ---
 ---ACP vs Traditional Providers
 ---

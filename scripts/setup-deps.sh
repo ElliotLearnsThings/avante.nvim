@@ -11,7 +11,6 @@ DEPS=(
   "hrsh7th/nvim-cmp"
   "ibhagwan/fzf-lua"
   "nvim-tree/nvim-web-devicons"
-  "zbirenbaum/copilot.lua"
   "folke/lazy.nvim"
 )
 

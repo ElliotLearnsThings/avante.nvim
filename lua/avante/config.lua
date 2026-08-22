@@ -38,18 +38,13 @@
 ---
 --->lua
 ---   require("avante").setup({
----     provider = "claude",
+---     provider = "claude_code",
 ---     mode = "agentic",
 ---     instructions_file = "avante.md",
 ---     providers = {
----       claude = {
----         endpoint = "https://api.anthropic.com",
----         model = "claude-sonnet-4-20250514",
----         timeout = 30000,
----         extra_request_body = {
----           temperature = 0.75,
----           max_tokens = 20480,
----         },
+---       claude_code = {
+---         model = "sonnet",
+---         permission_mode = "acceptEdits",
 ---       },
 ---     },
 ---     behaviour = {
@@ -104,29 +99,36 @@
 ---<
 ---
 ---
----Fast Apply
+---The Claude Code provider
 ---
----Fast Apply uses a specialized apply model for faster code edits. Enable it
----and configure Morph:
---->
+---Avante talks to the native Claude Code CLI through the Python adapter in
+---`py/claude-code-adapter`. Install the CLI from https://claude.com/claude-code
+---and authenticate it with `claude auth` — Avante never asks for an API key.
+---Python 3.9 or newer must be on your $PATH; the adapter has no dependencies of
+---its own.
+---
+---Claude Code runs its own tools and edits files on disk directly, so
+---`permission_mode` — not Avante's diff review — is what governs how freely it
+---acts:
+--->lua
 ---   require("avante").setup({
----     behaviour = {
----       enable_fastapply = true,
----     },
 ---     providers = {
----       morph = {
----         model = "morph-v3-large",
+---       claude_code = {
+---         model = "opus",
+---         --- "acceptEdits" | "plan" | "bypassPermissions" | "manual" | "dontAsk" | "auto"
+---         permission_mode = "plan",
+---         --- Restrict which built-in tools it may reach for.
+---         allowed_tools = { "Read", "Grep", "Glob" },
 ---       },
 ---     },
 ---   })
 ---<
 ---
----Set:
---->
----   export MORPH_API_KEY="your-api-key"
----<
+---Agent Client Protocol agents
 ---
----Configure ACP providers with `acp_providers`:
+---`acp_providers` is empty by default — the native provider above supersedes
+---the old `claude-code` ACP entry, which wrapped the CLI in a third-party npm
+---shim. Configure your own agent if you want one:
 ---
 --->lua
 ---   require("avante").setup({
@@ -139,19 +141,11 @@
 ---           GEMINI_API_KEY = os.getenv("GEMINI_API_KEY"),
 ---         },
 ---       },
----       ["codex"] = {
----         command = "codex-acp",
----         args = {},
----         env = {
----           NODE_NO_WARNINGS = "1",
----           OPENAI_API_KEY = os.getenv("OPENAI_API_KEY"),
----         },
----       },
 ---     },
 ---   })
 ---<
 ---
----Select an ACP-backed provider with |:AvanteSwitchProvider|.
+---Select an ACP-backed agent with |:AvanteSwitchProvider|.
 ---
 ---You can also set avante options via `vim.g.avante`.
 ---
@@ -191,12 +185,7 @@
 
 local Utils = require("avante.utils")
 
-local function copilot_use_response_api(opts)
-  local model = opts and opts.model
-  return type(model) == "string" and model:match("gpt%-%d+%.?%d*%-codex") ~= nil
-end
-
----@alias avante.ProviderName "claude" | "openai" | "azure" | "gemini" | "vertex" | "cohere" | "copilot" | "bedrock" | "ollama" | "watsonx_code_assistant" | "mistral" | string
+---@alias avante.ProviderName "claude_code" | string
 
 ---@class avante.file_selector.IParams
 ---@field public title      string
@@ -280,10 +269,9 @@ M.instructions_file = "avante.md"
 --- - If you want to manually review each step before applying changes
 --- - If you're working in a sensitive environment where automatic code changes aren't desired
 ---@field mode avante.Mode
---- WARNING: Since auto-suggestions are a high-frequency operation and therefore expensive,
---- currently designating it as `copilot` provider is dangerous because: https://github.com/yetone/avante.nvim/issues/1048
---- Of course, you can reduce the request frequency by increasing `suggestion.debounce`.
----@field auto_suggestions_provider? boolean
+--- WARNING: Auto-suggestions are a high-frequency operation and therefore expensive.
+--- Reduce the request frequency by increasing `suggestion.debounce`.
+---@field auto_suggestions_provider? avante.ProviderName
 ---To add support for custom provider, follow the format below
 ---See https://github.com/yetone/avante.nvim/wiki#custom-providers for more details
 ---@field providers {string: AvanteProvider}
@@ -334,7 +322,7 @@ M._defaults = {
   ---@type avante.Mode
   mode = "agentic",
   ---@type avante.ProviderName
-  provider = "claude",
+  provider = "claude_code",
   auto_suggestions_provider = nil,
   memory_summary_provider = nil,
   ---@alias Tokenizer "tiktoken" | "hf"
@@ -542,278 +530,76 @@ M._defaults = {
       },
     },
   },
-  acp_providers = {
-    ["gemini-cli"] = {
-      command = "gemini",
-      args = { "--experimental-acp" },
-      env = {
-        NODE_NO_WARNINGS = "1",
-        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY"),
-      },
-      auth_method = "gemini-api-key",
-    },
-    ["claude-code"] = {
-      command = "claude-agent-acp",
-      args = {},
-      env = {
-        NODE_NO_WARNINGS = "1",
-        ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY"),
-        ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL"),
-        ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE = vim.fn.exepath("claude"),
-        ACP_PERMISSION_MODE = "bypassPermissions",
-      },
-    },
-    ["goose"] = {
-      command = "goose",
-      args = { "acp" },
-    },
-    ["codex"] = {
-      command = "codex-acp",
-      args = {},
-      env = {
-        NODE_NO_WARNINGS = "1",
-        HOME = os.getenv("HOME"),
-        PATH = os.getenv("PATH"),
-        OPENAI_API_KEY = os.getenv("OPENAI_API_KEY"),
-      },
-    },
-    ["opencode"] = {
-      command = "opencode",
-      args = { "acp" },
-    },
-    ["kimi-cli"] = {
-      command = "kimi",
-      args = { "acp" },
-    },
-  },
+  --- Agent Client Protocol agents.  |avante-acp|
+  ---
+  --- Empty by default: the native `claude_code` provider supersedes the old
+  --- `claude-code` ACP entry, which wrapped the CLI in a third-party npm shim.
+  --- Configure your own agent here if you want one.
+  acp_providers = {},
   providers = {
-    ---@type AvanteSupportedProvider
-    openai = {
-      endpoint = "https://api.openai.com/v1",
-      model = "gpt-4o",
-      timeout = 30000,
-      context_window = 128000, -- Number of tokens to send to the model for context
-      use_response_api = copilot_use_response_api, -- Automatically switch to Response API for GPT-5 Codex models
-      support_previous_response_id = true, -- OpenAI Response API supports previous_response_id for stateful conversations
-      extra_request_body = {
-        temperature = 0.75,
-        max_completion_tokens = 16384, -- Increase this to include reasoning tokens (for reasoning models). For Response API, will be converted to max_output_tokens
-        reasoning_effort = "medium", -- low|medium|high, only used for reasoning models. For Response API, this will be converted to reasoning.effort
-        -- background = false, -- Response API only: set to true to start a background task
-        -- NOTE: previous_response_id is automatically managed by the provider for tool calling - don't set manually
-      },
-    },
-    ---@type AvanteSupportedProvider
-    copilot = {
-      endpoint = "https://api.githubcopilot.com",
-      model = "gpt-4o-2024-11-20",
-      proxy = nil, -- [protocol://]host[:port] Use this proxy
-      allow_insecure = false, -- Allow insecure server connections
-      timeout = 30000, -- Timeout in milliseconds
-      context_window = 64000, -- Number of tokens to send to the model for context
-      use_response_api = copilot_use_response_api, -- Automatically switch to Response API for GPT-5 Codex models
-      support_previous_response_id = false, -- Copilot doesn't support previous_response_id, must send full history
-      -- NOTE: Copilot doesn't support previous_response_id, always sends full conversation history including tool_calls
-      -- NOTE: Response API doesn't support some parameters like top_p, frequency_penalty, presence_penalty
-      extra_request_body = {
-        -- temperature is not supported by Response API for reasoning models
-        max_tokens = 20480,
-      },
-    },
-    ---@type AvanteAzureProvider
-    azure = {
-      endpoint = "", -- example: "https://<your-resource-name>.openai.azure.com"
-      deployment = "", -- Azure deployment name (e.g., "gpt-4o", "my-gpt-4o-deployment")
-      api_version = "2024-12-01-preview",
-      timeout = 30000, -- Timeout in milliseconds, increase this for reasoning models
-      extra_request_body = {
-        temperature = 0.75,
-        max_completion_tokens = 16384, -- Increase this toinclude reasoning tokens (for reasoning models); but too large default value will not fit for some models (e.g. gpt-5-chat supports at most 16384 completion tokens)
-        reasoning_effort = "medium", -- low|medium|high, only used for reasoning models
-      },
-    },
-    ---@type AvanteAnthropicProvider
-    claude = {
-      endpoint = "https://api.anthropic.com",
-      auth_type = "api",
-      model = "claude-sonnet-4-5-20250929",
-      timeout = 30000, -- Timeout in milliseconds
+    --- The only built-in provider: the native Claude Code CLI, driven through
+    --- the Python adapter in `py/claude-code-adapter`.
+    ---
+    --- Claude Code authenticates itself (`claude auth`) and runs its own tools,
+    --- so there is no API key to set and Avante's tool runner stays out of the
+    --- way. `permission_mode` is what governs how freely it edits your files.
+    ---@type AvanteClaudeCodeProvider
+    claude_code = {
+      display_name = "Claude Code",
+      --- A model alias ("opus", "sonnet", "haiku") or a full model name.
+      model = "sonnet",
+      --- Offered by |:AvanteModels|.
+      model_names = { "opus", "sonnet", "haiku" },
+      --- The `claude` executable. A bare name is looked up on $PATH.
+      cli_path = "claude",
+      --- Python 3.9+ interpreter for the adapter. Auto-detected when nil.
+      python_path = nil,
+      --- How freely Claude Code may act: "acceptEdits" | "plan" |
+      --- "bypassPermissions" | "manual" | "dontAsk" | "auto".
+      permission_mode = "acceptEdits",
+      --- Built-in tools Claude Code may use. nil keeps its default set; an
+      --- empty table disables all of them.
+      tools = nil,
+      allowed_tools = nil,
+      disallowed_tools = nil,
+      --- Extra directories Claude Code is allowed to touch.
+      add_dirs = {},
+      --- MCP server config files or JSON strings.
+      mcp_config = {},
+      strict_mcp_config = false,
+      --- Settings file path or JSON string, and which setting sources to load.
+      settings = nil,
+      setting_sources = nil,
+      --- Custom agent definitions, as a JSON string.
+      agents = nil,
+      --- Reasoning effort: "low" | "medium" | "high" | "xhigh" | "max".
+      effort = nil,
+      --- Model to fall back to when the primary one is overloaded.
+      fallback_model = nil,
+      --- Spend ceiling for a single turn, in US dollars.
+      max_budget_usd = nil,
+      --- Directory Claude Code runs in. Defaults to the project root.
+      cwd = nil,
+      --- Resume the Claude Code session between turns instead of replaying the
+      --- whole transcript. Keeps prompt caching warm.
+      stateful = true,
+      --- Show Claude Code's own tool calls and results in the sidebar.
+      emit_tool_activity = true,
+      --- Arguments appended verbatim to the CLI invocation.
+      extra_args = {},
+      --- Extra environment variables for the CLI.
+      env = {},
+      --- Abort the turn after this many seconds. 0 disables the timeout.
+      timeout = 0,
       context_window = 200000,
-      extra_request_body = {
-        temperature = 0.75,
-        max_tokens = 64000,
-      },
-    },
-    ---@type AvanteSupportedProvider
-    ---@diagnostic disable-next-line: missing-fields
-    bedrock = {
-      model = "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-      model_names = {
-        "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        "us.anthropic.claude-opus-4-20250514-v1:0",
-        "us.anthropic.claude-opus-4-1-20250805-v1:0",
-        "us.anthropic.claude-sonnet-4-20250514-v1:0",
-      },
-      timeout = 30000, -- Timeout in milliseconds
-      extra_request_body = {
-        temperature = 0.75,
-        max_tokens = 20480,
-      },
-      aws_region = "", -- AWS region to use for authentication and bedrock API
-      aws_profile = "", -- AWS profile to use for authentication, if unspecified uses default credentials chain
-    },
-    ---@type AvanteSupportedProvider
-    gemini = {
-      endpoint = "https://generativelanguage.googleapis.com/v1beta/models",
-      model = "gemini-3.6-flash",
-      timeout = 30000, -- Timeout in milliseconds
-      context_window = 1048576,
-      use_ReAct_prompt = true,
-      extra_request_body = {
-        generationConfig = {
-          temperature = 0.75,
-        },
-      },
-    },
-    ---@type AvanteSupportedProvider
-    vertex = {
-      endpoint = "https://aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/publishers/google/models",
-      model = "gemini-1.5-flash-002",
-      timeout = 30000, -- Timeout in milliseconds
-      context_window = 1048576,
-      use_ReAct_prompt = true,
-      extra_request_body = {
-        generationConfig = {
-          temperature = 0.75,
-        },
-      },
-    },
-    ---@type AvanteSupportedProvider
-    cohere = {
-      endpoint = "https://api.cohere.com/v2",
-      model = "command-r-plus-08-2024",
-      timeout = 30000, -- Timeout in milliseconds
-      extra_request_body = {
-        temperature = 0.75,
-        max_tokens = 20480,
-      },
-    },
-    ---@type AvanteSupportedProvider
-    ollama = {
-      endpoint = "http://127.0.0.1:11434",
-      timeout = 30000, -- Timeout in milliseconds
-      use_ReAct_prompt = true,
-      extra_request_body = {
-        options = {
-          temperature = 0.75,
-          num_ctx = 20480,
-          keep_alive = "5m",
-        },
-      },
-    },
-    ---@type AvanteSupportedProvider
-    watsonx_code_assistant = {
-      endpoint = "https://api.dataplatform.cloud.ibm.com/v2/wca/core/chat/text/generation",
-      model = "granite-8b-code-instruct",
-      timeout = 30000, -- Timeout in milliseconds
-      extra_request_body = {
-        -- Additional watsonx-specific parameters can be added here
-      },
-    },
-
-    ---@type AvanteSupportedProvider
-    vertex_claude = {
-      endpoint = "https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/publishers/anthropic/models",
-      model = "claude-3-5-sonnet-v2@20241022",
-      timeout = 30000, -- Timeout in milliseconds
-      extra_request_body = {
-        temperature = 0.75,
-        max_tokens = 20480,
-      },
-    },
-    ---@type AvanteSupportedProvider
-    ["claude-haiku"] = {
-      __inherited_from = "claude",
-      endpoint = "https://api.anthropic.com",
-      model = "claude-3-5-haiku-20241022",
-      timeout = 30000, -- Timeout in milliseconds
-      extra_request_body = {
-        temperature = 0.75,
-        max_tokens = 8192,
-      },
-    },
-    ---@type AvanteSupportedProvider
-    ["claude-opus"] = {
-      __inherited_from = "claude",
-      endpoint = "https://api.anthropic.com",
-      model = "claude-3-opus-20240229",
-      timeout = 30000, -- Timeout in milliseconds
-      extra_request_body = {
-        temperature = 0.75,
-        max_tokens = 20480,
-      },
-    },
-    ["openai-gpt-4o-mini"] = {
-      __inherited_from = "openai",
-      model = "gpt-4o-mini",
-    },
-    aihubmix = {
-      __inherited_from = "openai",
-      endpoint = "https://aihubmix.com/v1",
-      model = "gpt-4o-2024-11-20",
-      api_key_name = "AIHUBMIX_API_KEY",
-    },
-    ["aihubmix-claude"] = {
-      __inherited_from = "claude",
-      endpoint = "https://aihubmix.com",
-      model = "claude-3-7-sonnet-20250219",
-      api_key_name = "AIHUBMIX_API_KEY",
-    },
-    morph = {
-      __inherited_from = "openai",
-      endpoint = "https://api.morphllm.com/v1",
-      model = "auto",
-      api_key_name = "MORPH_API_KEY",
-    },
-    moonshot = {
-      __inherited_from = "openai",
-      endpoint = "https://api.moonshot.ai/v1",
-      model = "kimi-k2-0711-preview",
-      api_key_name = "MOONSHOT_API_KEY",
-    },
-    xai = {
-      __inherited_from = "openai",
-      endpoint = "https://api.x.ai/v1",
-      model = "grok-code-fast-1",
-      api_key_name = "XAI_API_KEY",
-    },
-    glm = {
-      __inherited_from = "openai",
-      endpoint = "https://open.bigmodel.cn/api/coding/paas/v4",
-      model = "GLM-4.7",
-      api_key_name = "GLM_API_KEY",
-    },
-    qwen = {
-      __inherited_from = "openai",
-      endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      model = "qwen3-coder-plus",
-      api_key_name = "DASHSCOPE_API_KEY",
-    },
-    mistral = {
-      __inherited_from = "openai",
-      endpoint = "https://api.mistral.ai/v1",
-      model = "mistral-large-latest",
-      api_key_name = "MISTRAL_API_KEY",
-      extra_request_body = {
-        max_tokens = 4096, -- to avoid using the unsupported max_completion_tokens
-      },
+      --- Claude Code brings its own tools; Avante's would duplicate them.
+      disable_tools = true,
     },
   },
   ---Specify the special dual_boost mode
   ---1. enabled: Whether to enable dual_boost mode. Default to false.
-  ---2. first_provider: The first provider to generate response. Default to "openai".
-  ---3. second_provider: The second provider to generate response. Default to "claude".
+  ---2. first_provider: The first provider to generate response. Default to "claude_code".
+  ---3. second_provider: The second provider to generate response. Default to "claude_code".
   ---4. prompt: The prompt to generate response based on the two reference outputs.
   ---5. timeout: Timeout in milliseconds. Default to 60000.
   ---How it works:
@@ -821,8 +607,8 @@ M._defaults = {
   ---Note: This is an experimental feature and may not work as expected.
   dual_boost = {
     enabled = false,
-    first_provider = "openai",
-    second_provider = "claude",
+    first_provider = "claude_code",
+    second_provider = "claude_code",
     prompt = "Based on the two reference outputs below, generate a response that incorporates elements from both but reflects your own judgment and unique perspective. Do not provide any explanation, just give the response directly. Reference Output 1: [{{provider1_output}}], Reference Output 2: [{{provider2_output}}]",
     timeout = 60000, -- Timeout in milliseconds
   },
@@ -1347,7 +1133,7 @@ function M.setup(opts)
   ---@diagnostic disable-next-line: undefined-field
   if M._options.disable_tools ~= nil then
     Utils.warn(
-      "`disable_tools` is provider-scoped, not globally scoped. Therefore, you cannot set `disable_tools` at the top level. It should be set under a provider, for example: `openai.disable_tools = true`",
+      "`disable_tools` is provider-scoped, not globally scoped. Therefore, you cannot set `disable_tools` at the top level. It should be set under a provider, for example: `claude_code.disable_tools = true`",
       { title = "Avante" }
     )
   end
