@@ -140,6 +140,10 @@ describe("generate_prompts", function()
   end)
 
   it("should include tools when non-empty tools are provided", function()
+    -- This is about the generic merge, so use a provider that accepts tools.
+    -- Providers caches the resolved table, so the flag must be set there.
+    local resolved = require("avante.providers")[require("avante.config").provider]
+    resolved.disable_tools = false
     local mock_tool = {
       name = "test_tool",
       description = "A test tool",
@@ -149,8 +153,21 @@ describe("generate_prompts", function()
       tools = { mock_tool },
     }
     local result = llm.generate_prompts(opts)
+    resolved.disable_tools = true
     assert.are.same(#result.tools, 1)
     assert.are.same(result.tools[1].name, "test_tool")
+  end)
+
+  it("should drop tools for a provider that disables them", function()
+    -- Regression: claude_code discards tools anyway, and leaving them in made
+    -- the agent loop believe a tool could still be called.
+    local mock_tool = {
+      name = "test_tool",
+      description = "A test tool",
+      func = function() end,
+    }
+    local result = llm.generate_prompts({ tools = { mock_tool } })
+    assert.are.same(nil, result.tools)
   end)
 
   it("should not duplicate instruction file content when called multiple times with same opts", function()
@@ -267,6 +284,9 @@ describe("agentic completion reminder", function()
   end)
 
   it("still nags when tools were offered", function()
+    -- Only meaningful for a provider that actually receives tools.
+    local resolved = require("avante.providers")[Config.provider]
+    resolved.disable_tools = false
     local tools = {
       {
         name = "attempt_completion",
@@ -275,6 +295,8 @@ describe("agentic completion reminder", function()
         returns = {},
       },
     }
-    assert.is_true(count_requests(tools) > 1)
+    local requests = count_requests(tools)
+    resolved.disable_tools = true
+    assert.is_true(requests > 1)
   end)
 end)

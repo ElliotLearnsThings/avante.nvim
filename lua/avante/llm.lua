@@ -316,11 +316,13 @@ function M.generate_prompts(opts)
   local model_name = "unknown"
   local context_window = nil
   local use_react_prompt = false
+  local tools_disabled = false
   if not is_acp_provider then
     local provider = opts.provider or Providers[Config.provider]
     model_name = provider.model or "unknown"
     local provider_conf = Providers.parse_config(provider)
     use_react_prompt = provider_conf.use_ReAct_prompt
+    tools_disabled = provider_conf.disable_tools == true
     context_window = provider.context_window
   end
 
@@ -452,6 +454,11 @@ function M.generate_prompts(opts)
   local tools = {}
   if opts.tools then tools = vim.list_extend(tools, opts.tools) end
   if opts.prompt_opts and opts.prompt_opts.tools then tools = vim.list_extend(tools, opts.prompt_opts.tools) end
+
+  -- A provider with `disable_tools` never forwards these, so building the list
+  -- only costs tokens and leaves the agent loop believing tools are available
+  -- when nothing can ever call one.
+  if tools_disabled then tools = {} end
 
   -- Set tools to nil if empty to avoid sending empty arrays to APIs that require
   -- tools to be either non-existent or have at least one item
