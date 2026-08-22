@@ -18,6 +18,7 @@ import json
 import socket
 import tempfile
 import threading
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -63,6 +64,12 @@ class ToolBridge:
         self._pending: dict[str, PendingCall] = {}
         self._lock = threading.Lock()
         self._next_id = 0
+        # A bridge lives for one Avante turn, but `session_ctx` — and the diff
+        # bookkeeping keyed on tool_use_id — lives for the whole conversation.
+        # A per-bridge counter alone would restart at 1 every turn and collide,
+        # which silently drops the second edit to a file while still reporting
+        # success. The prefix makes ids unique across turns and processes.
+        self._id_prefix = uuid.uuid4().hex[:8]
         self._closed = threading.Event()
         # A socket in the abstract filesystem would be simpler, but is Linux
         # only; a temp directory keeps macOS working too.
@@ -146,7 +153,7 @@ class ToolBridge:
         pending = PendingCall()
         with self._lock:
             self._next_id += 1
-            call_id = f"avante-{self._next_id}"
+            call_id = f"avante-{self._id_prefix}-{self._next_id}"
             self._pending[call_id] = pending
         self._emit({"id": call_id, "name": name, "input": arguments})
         return pending.wait()

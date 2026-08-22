@@ -1052,4 +1052,125 @@ describe("claude_code provider", function()
       assert.are.same("<task>what does 20/20 mean</task>", request.messages[1].content)
     end)
   end)
+
+  describe("bridged tool calls", function()
+    local LLMTools = require("avante.llm_tools")
+    local real_process
+
+    --- A turn context like the one M.subprocess builds, capturing what the
+    --- provider writes back to the adapter.
+    local function make_ctx()
+      local ctx = { turn_id = "turn-1", tools = {}, tool_opts = {}, written = {} }
+      ctx.write = function(line) table.insert(ctx.written, vim.json.decode(line)) end
+      return ctx
+    end
+
+    before_each(function() real_process = LLMTools.process_tool_use end)
+    after_each(function() LLMTools.process_tool_use = real_process end)
+
+    it("announces the call as calling, then answers with the result", function()
+      LLMTools.process_tool_use = function() return "listed 3 files", nil end
+      local ctx = make_ctx()
+      local recorded, opts = make_handlers()
+      ClaudeCode.handle_tool_call(ctx, { id = "c1", name = "ls", input = {} }, opts)
+
+      local use = recorded.messages[1]
+      assert.are.same("tool_use", use.message.content[1].type)
+      assert.are.same("ls", use.message.content[1].name)
+      assert.are.same("turn-1", use.turn_id)
+
+      local result = recorded.messages[#recorded.messages]
+      assert.are.same("tool_result", result.message.content[1].type)
+      assert.are.same("listed 3 files", result.message.content[1].content)
+      assert.is_falsy(result.message.content[1].is_error)
+      -- Cleared once the result exists, or the sidebar caches a stuck box.
+      assert.is_false(use.is_calling)
+
+      assert.are.same(1, #ctx.written)
+      assert.are.same("c1", ctx.written[1].id)
+      assert.are.same("listed 3 files", ctx.written[1].content)
+    end)
+
+    it("marks the call as calling while the tool runs", function()
+      local ctx = make_ctx()
+      local recorded, opts = make_handlers()
+      local seen_while_running
+      LLMTools.process_tool_use = function(_, _, tool_opts)
+        seen_while_running = recorded.messages[1].is_calling
+        tool_opts.on_complete("done", nil)
+        return nil, nil
+      end
+      ClaudeCode.handle_tool_call(ctx, { id = "c2", name = "ls", input = {} }, opts)
+      -- Without this the inline permission buttons are never drawn.
+      assert.is_true(seen_while_running)
+    end)
+
+    it("answers asynchronously through on_complete", function()
+      local finish
+      LLMTools.process_tool_use = function(_, _, tool_opts)
+        finish = tool_opts.on_complete
+        return nil, nil
+      end
+      local ctx = make_ctx()
+      local _, opts = make_handlers()
+      ClaudeCode.handle_tool_call(ctx, { id = "c3", name = "grep", input = {} }, opts)
+      assert.are.same(0, #ctx.written)
+      finish("two matches", nil)
+      assert.are.same("two matches", ctx.written[1].content)
+    end)
+
+    it("reports an error as an error, even when a result came with it", function()
+      LLMTools.process_tool_use = function() return "false", "No permission to access path" end
+      local ctx = make_ctx()
+      local recorded, opts = make_handlers()
+      ClaudeCode.handle_tool_call(ctx, { id = "c4", name = "view", input = {} }, opts)
+      local result = recorded.messages[#recorded.messages]
+      assert.is_true(result.message.content[1].is_error)
+      assert.are.same("No permission to access path", ctx.written[1].error)
+    end)
+
+    it("flags a declined tool so the sidebar can say so", function()
+      LLMTools.process_tool_use = function() return "false", "User declined, reason: nope" end
+      local ctx = make_ctx()
+      local recorded, opts = make_handlers()
+      ClaudeCode.handle_tool_call(ctx, { id = "c5", name = "str_replace", input = {} }, opts)
+      local result = recorded.messages[#recorded.messages]
+      assert.is_true(result.message.content[1].is_user_declined)
+    end)
+
+    it("strips the mcp namespace Claude Code adds", function()
+      local seen
+      LLMTools.process_tool_use = function(_, tool_use)
+        seen = tool_use.name
+        return "ok", nil
+      end
+      local ctx = make_ctx()
+      local recorded, opts = make_handlers()
+      ClaudeCode.handle_tool_call(ctx, { id = "c6", name = "mcp__avante__ls", input = {} }, opts)
+      assert.are.same("ls", seen)
+      assert.are.same("ls", recorded.messages[1].message.content[1].name)
+    end)
+
+    it("answers exactly once when the tool resolves twice", function()
+      LLMTools.process_tool_use = function(_, _, tool_opts)
+        tool_opts.on_complete("first", nil)
+        tool_opts.on_complete("second", nil)
+        return nil, nil
+      end
+      local ctx = make_ctx()
+      local _, opts = make_handlers()
+      ClaudeCode.handle_tool_call(ctx, { id = "c7", name = "ls", input = {} }, opts)
+      assert.are.same(1, #ctx.written)
+      assert.are.same("first", ctx.written[1].content)
+    end)
+
+    it("survives a tool that raises", function()
+      LLMTools.process_tool_use = function() error("boom") end
+      local ctx = make_ctx()
+      local _, opts = make_handlers()
+      ClaudeCode.handle_tool_call(ctx, { id = "c8", name = "ls", input = {} }, opts)
+      assert.are.same(1, #ctx.written)
+      assert.is_truthy(ctx.written[1].error)
+    end)
+  end)
 end)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 
+from avante_claude_code.bridge import ToolBridge
 from avante_claude_code.cli import build_args, build_stdin_messages
 from avante_claude_code.protocol import CAPABILITIES_EVENT, SESSION_EVENT, AdapterRequest, SSEWriter
 from avante_claude_code.translator import StreamTranslator
@@ -312,3 +313,29 @@ def test_prompt_tokens_are_a_peak_not_a_running_total() -> None:
     assert usage["cache_read_input_tokens"] == 9800
     # Generated tokens really do accumulate.
     assert usage["output_tokens"] == 60
+
+
+def test_tool_call_ids_are_unique_across_bridges() -> None:
+    """
+    A bridge lives one turn; session_ctx and the diff cache live longer.
+
+    Restarting the counter each turn made the second edit to a file collide with
+    the first and be silently dropped, while still reporting success.
+    """
+    seen: list[dict] = []
+    bridges = [ToolBridge([], seen.append) for _ in range(2)]
+    try:
+        for bridge in bridges:
+
+            def emit(call: dict, current: ToolBridge = bridge) -> None:
+                seen.append(call)
+                current.resolve(call["id"], {"content": "ok"})
+
+            bridge._emit = emit  # noqa: SLF001
+            bridge._call("t", {})  # noqa: SLF001
+    finally:
+        for bridge in bridges:
+            bridge.close()
+
+    ids = [call["id"] for call in seen]
+    assert len(ids) == len(set(ids)), ids
