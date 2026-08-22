@@ -211,8 +211,9 @@ local function to_mcp_tool(tool)
 end
 
 ---@param prompt_opts AvantePromptOptions
+---@param curl_opts? avante.CurlOpts Carries the chat's stored session, when there is one
 ---@return AvanteSubprocessOutput | nil
-function M:parse_subprocess_args(prompt_opts)
+function M:parse_subprocess_args(prompt_opts, curl_opts)
   local provider_conf, extra_request_body = P.parse_config(self)
 
   local cli_path = resolve_cli(provider_conf)
@@ -246,9 +247,15 @@ function M:parse_subprocess_args(prompt_opts)
     end
   end
 
+  -- The chat carries the session id when there is one, which survives edits to
+  -- the files quoted in the conversation. The content hash is only a fallback
+  -- for callers with no chat behind them, such as the headless agent loop.
   local session_key = M.session_key(prompt_opts.messages)
   local resume = nil
-  if provider_conf.stateful ~= false and session_key then resume = M._sessions[session_key] end
+  local session_opts = curl_opts and curl_opts.session_opts or {}
+  if provider_conf.stateful ~= false then
+    resume = session_opts.session_id or (session_key and M._sessions[session_key])
+  end
 
   local request = vim.tbl_deep_extend("force", {
     messages = messages,
@@ -442,7 +449,11 @@ function M:parse_response(ctx, data_stream, event_state, opts)
 
   if event_state == "avante_session" then
     -- Remember the CLI session so the next turn can resume instead of replaying.
-    if jsn.session_id and ctx.session_key then M._sessions[ctx.session_key] = jsn.session_id end
+    if jsn.session_id then
+      if ctx.session_key then M._sessions[ctx.session_key] = jsn.session_id end
+      local save = ctx.session_opts and ctx.session_opts.on_save_session_id
+      if save then save(jsn.session_id) end
+    end
     return
   end
 

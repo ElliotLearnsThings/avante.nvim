@@ -277,3 +277,38 @@ def test_claude_codes_own_tools_are_still_echoed() -> None:
     )
     text = "".join(e["delta"].get("text", "") for e in events if e["type"] == "content_block_delta")
     assert "Read(a.txt)" in text
+
+
+def test_prompt_tokens_are_a_peak_not_a_running_total() -> None:
+    """Summing context across a tool loop makes Avante compact for no reason."""
+    events = drive(
+        [
+            stream({"type": "message_start", "message": {"id": "m", "role": "assistant", "content": []}}),
+            stream(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"input_tokens": 100, "cache_read_input_tokens": 9000, "output_tokens": 20},
+                },
+            ),
+            stream(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {"input_tokens": 120, "cache_read_input_tokens": 9500, "output_tokens": 30},
+                },
+            ),
+            {
+                "type": "result",
+                "is_error": False,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 130, "cache_read_input_tokens": 9800, "output_tokens": 10},
+            },
+        ],
+    )
+    usage = events[-2]["usage"]
+    # Context is the largest single request, not 100+120+130.
+    assert usage["input_tokens"] == 130
+    assert usage["cache_read_input_tokens"] == 9800
+    # Generated tokens really do accumulate.
+    assert usage["output_tokens"] == 60

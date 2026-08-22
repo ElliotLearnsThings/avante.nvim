@@ -51,13 +51,22 @@ _CAPABILITY_KEYS = (
     "cwd",
 )
 
-#: Usage counters worth summing across the CLI's internal requests.
-_USAGE_KEYS = (
+#: Generated tokens genuinely accumulate across the CLI's internal requests —
+#: every one of them was produced.
+_SUMMED_USAGE_KEYS = ("output_tokens",)
+
+#: Prompt-side counters describe how big the context *was* for one request, not
+#: a running total. Summing them across an agentic loop counts the same context
+#: once per tool call, which Avante then reads as the conversation approaching
+#: its context window and compacts for no reason. The largest single request is
+#: the honest figure.
+_PEAK_USAGE_KEYS = (
     "input_tokens",
-    "output_tokens",
     "cache_creation_input_tokens",
     "cache_read_input_tokens",
 )
+
+_USAGE_KEYS = _SUMMED_USAGE_KEYS + _PEAK_USAGE_KEYS
 
 
 def _truncate(text: str) -> str:
@@ -341,7 +350,11 @@ class StreamTranslator:
     def _accumulate(self, usage: object) -> None:
         if not isinstance(usage, dict):
             return
-        for key in _USAGE_KEYS:
+        for key in _SUMMED_USAGE_KEYS:
             value = usage.get(key)
             if isinstance(value, int):
                 self._usage[key] += value
+        for key in _PEAK_USAGE_KEYS:
+            value = usage.get(key)
+            if isinstance(value, int):
+                self._usage[key] = max(self._usage[key], value)

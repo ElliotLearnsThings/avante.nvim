@@ -3008,6 +3008,11 @@ function Sidebar:handle_submit(request)
         self.chat_history.acp_session_id = session_id
         Path.history.save(self.code.bufnr, self.chat_history)
       end,
+      provider_session_id = self.chat_history.provider_session_id,
+      on_save_provider_session_id = function(session_id)
+        self.chat_history.provider_session_id = session_id
+        Path.history.save(self.code.bufnr, self.chat_history)
+      end,
       set_tool_use_store = set_tool_use_store,
       get_history_messages = function(opts) return self:get_history_messages_for_api(opts) end,
       get_todos = function()

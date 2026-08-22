@@ -180,7 +180,7 @@ vim.g.avante_login = vim.g.avante_login
 ---@field env? table<string, string> Extra environment variables
 ---@field cwd? string Working directory for the process
 ---@field ctx? table Seeded onto the turn context handed to `parse_response`
----@alias AvanteSubprocessArgsParser fun(self: AvanteProviderFunctor, prompt_opts: AvantePromptOptions): (AvanteSubprocessOutput | nil)
+---@alias AvanteSubprocessArgsParser fun(self: AvanteProviderFunctor, prompt_opts: AvantePromptOptions, curl_opts?: avante.CurlOpts): (AvanteSubprocessOutput | nil)
 ---
 ---@alias AvanteResponseParser fun(self: AvanteProviderFunctor, ctx: any, data_stream: string, event_state: string?, opts: AvanteHandlerOptions): nil
 ---
@@ -496,6 +496,7 @@ vim.g.avante_login = vim.g.avante_login
 ---@field prompt_opts AvantePromptOptions
 ---@field handler_opts AvanteHandlerOptions
 ---@field tool_opts? {session_ctx: table, on_log: function, set_tool_use_store: function} For subprocess providers that run Avante's tools themselves
+---@field session_opts? {session_id: string?, on_save_session_id: function?} For providers that keep a session between turns
 ---@field on_response_headers? fun(headers: table<string, string>): nil
 ---
 ---@class avante.lsp.Definition

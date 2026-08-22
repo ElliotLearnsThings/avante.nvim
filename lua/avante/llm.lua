@@ -594,7 +594,7 @@ function M.subprocess(opts)
 
   latch_on_stop(handler_opts)
 
-  local spec = provider:parse_subprocess_args(opts.prompt_opts)
+  local spec = provider:parse_subprocess_args(opts.prompt_opts, opts)
   if not spec then
     handler_opts.on_stop({ reason = "error", error = "Provider configuration error" })
     return
@@ -603,6 +603,7 @@ function M.subprocess(opts)
   local turn_ctx = vim.tbl_extend("force", {}, spec.ctx or {})
   turn_ctx.turn_id = Utils.uuid()
   turn_ctx.tool_opts = opts.tool_opts or {}
+  turn_ctx.session_opts = opts.session_opts or {}
 
   local parse_stream_data = make_stream_parser(provider, turn_ctx, handler_opts)
 
@@ -2201,6 +2202,12 @@ function M._stream(opts)
       session_ctx = opts.session_ctx,
       on_log = opts.on_tool_log,
       set_tool_use_store = opts.set_tool_use_store,
+    },
+    -- A provider that keeps its own session between turns stores the id on the
+    -- chat, so it survives a restart and never depends on message content.
+    session_opts = {
+      session_id = opts.provider_session_id,
+      on_save_session_id = opts.on_save_provider_session_id,
     },
     on_response_headers = function(headers) resp_headers = headers end,
   })
