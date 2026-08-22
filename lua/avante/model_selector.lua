@@ -20,7 +20,9 @@ local function create_model_entries(provider_name, provider_cfg)
   local res = {}
   if provider_cfg.list_models then
     local models
-    local cache_key = provider_cfg.endpoint
+    -- Not every provider has an endpoint: the Claude Code one runs a local
+    -- process. Fall back to the provider name so the key is never nil.
+    local cache_key = provider_cfg.endpoint or provider_name
     if type(provider_cfg.list_models) == "function" then
       if M.list_models_invoked[cache_key] then return {} end
       M.list_models_invoked[cache_key] = true
