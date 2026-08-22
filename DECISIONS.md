@@ -117,6 +117,32 @@ owns its loop. Reconciling them looked like it meant reimplementing ACP. The MCP
 bridge is the third option that was missed: the CLI keeps its loop, and Avante's
 tools are simply reachable from inside it.
 
+### What the bridge was verified to do
+
+Headless, against the real CLI, with the reviewer trying to disprove it:
+
+- `str_replace` over the bridge changes the file on disk.
+- With `auto_approve_tool_permissions` off, the inline permission buttons
+  appear, the change sits in the buffer with diff extmarks and `co`/`ct`/`]x`
+  bound, **disk stays untouched until answered**, and approving writes it.
+- Rejecting reverts the buffer, leaves disk alone, and flags the result
+  `is_user_declined`.
+- `write_todos` populates the todos container.
+
+One honest limitation: bridged calls arrive complete over MCP, so
+`opts.streaming` is never set and the *live streaming diff preview* does not
+happen. You get the whole diff at once, then review it.
+
+### The id collision
+
+Tool ids must be unique for the life of a conversation, not a turn. A
+`ToolBridge` is built per turn and its counter restarted at 1, but `session_ctx`
+— and `replace_in_file`'s diff-block cache, keyed on `tool_use_id` — spans the
+whole agent loop. So the second edit in a conversation reused the first edit's
+id, hit a stale cache entry, and **was silently dropped while reporting
+success**. Ids now carry a per-bridge random prefix. This also fixes
+tool_use/tool_result pairing in history, which duplicate ids corrupted.
+
 ## 4b. What keeping the CLI's own tools would have meant
 
 **Decision.** Claude Code executes its own tools (Read, Edit, Write, Bash, Grep,
