@@ -345,6 +345,12 @@ require('avante').setup({})
 
   <summary><a href="https://github.com/lumen-oss/rocks.nvim">rocks.nvim</a></summary>
 
+> [!WARNING]
+>
+> The `avante.nvim` rock is published from **upstream**, so `:Rocks install
+> avante.nvim` gives you `yetone/avante.nvim`, not this fork. Point rocks.nvim
+> at this repository explicitly, or use one of the git-based managers above.
+
 Run `:Rocks install avante.nvim` then add to your init.lua:
 
 ```lua
@@ -420,6 +426,13 @@ end)
 
   <summary><a href="https://github.com/nix-community/home-manager">Home Manager</a></summary>
 
+> [!WARNING]
+>
+> `pkgs.vimPlugins.avante-nvim` packages **upstream** avante.nvim. To get this
+> fork, build the plugin from this repository — e.g. with
+> `pkgs.vimUtils.buildVimPlugin` and a `fetchFromGitHub` of
+> `ElliotLearnsThings/avante.nvim` — instead of using the packaged derivation.
+
 ```nix
 programs.neovim = {
   plugins = [
@@ -439,6 +452,12 @@ programs.neovim = {
 <details>
 
   <summary><a href="https://nix-community.github.io/nixvim/plugins/avante/index.html">Nixvim</a></summary>
+
+> [!WARNING]
+>
+> Nixvim's `plugins.avante` module also tracks **upstream**. Override its
+> `package` with a derivation built from `ElliotLearnsThings/avante.nvim` if you
+> want this fork.
 
 ```nix
   plugins.avante.enable = true;

@@ -273,6 +273,12 @@ end)
 
   <summary><a href="https://github.com/nix-community/home-manager">Home Manager</a></summary>
 
+> [!WARNING]
+>
+> `pkgs.vimPlugins.avante-nvim` 打包的是**上游**的 avante.nvim。若要使用本分支，请不要用
+> 打包好的 derivation，而是自行从本仓库构建插件——例如用 `pkgs.vimUtils.buildVimPlugin`
+> 搭配 `fetchFromGitHub` 拉取 `ElliotLearnsThings/avante.nvim`。
+
 ```nix
 programs.neovim = {
   plugins = [
@@ -292,6 +298,11 @@ programs.neovim = {
 <details>
 
   <summary><a href="https://nix-community.github.io/nixvim/plugins/avante/index.html">Nixvim</a></summary>
+
+> [!WARNING]
+>
+> Nixvim 的 `plugins.avante` 模块同样跟随**上游**。如果要使用本分支，请把它的 `package`
+> 覆盖为从 `ElliotLearnsThings/avante.nvim` 构建出来的 derivation。
 
 ```nix
   plugins.avante.enable = true;
