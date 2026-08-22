@@ -205,7 +205,15 @@ startup. Commands are available immediately in every session after the first
 message ever sent.
 
 `Utils.get_commands` gained a generic third source rather than a Claude Code
-special case: any provider exposing `list_slash_commands` contributes.
+special case: any provider exposing `list_slash_commands` contributes. A command
+with no callback falls through Avante's sidebar dispatch with the request text
+intact, which is exactly the pass-through we want.
+
+One wrinkle: a locally-resolved command like `/context` is answered by the CLI
+itself, which emits a *finished* assistant message with no `message_start` and
+no deltas. The translator originally read only `stream_event` records, so those
+replies were silently dropped. It now tracks which message ids arrived as a
+live stream and replays any assistant message that did not.
 
 The capability table is mutated in place, never rebound. `Providers.__index`
 builds the provider table with `vim.tbl_deep_extend`, which shares references

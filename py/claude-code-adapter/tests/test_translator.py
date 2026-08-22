@@ -181,3 +181,42 @@ def test_slash_command_text_is_sent_verbatim() -> None:
     request = AdapterRequest(messages=[{"role": "user", "content": "/compact keep the API notes"}])
     (message,) = build_stdin_messages(request)
     assert message["message"]["content"][0]["text"] == "/compact keep the API notes"
+
+
+def test_locally_resolved_slash_command_is_replayed() -> None:
+    """Claude Code answers /context itself, with no stream events to merge."""
+    events = drive(
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "id": "msg_local",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "## Context Usage"}],
+                },
+            },
+            {"type": "result", "is_error": False, "stop_reason": "end_turn"},
+        ],
+    )
+    text = "".join(e["delta"].get("text", "") for e in events if e["type"] == "content_block_delta")
+    assert text == "## Context Usage"
+    assert [e["type"] for e in events].count("message_start") == 1
+
+
+def test_streamed_message_is_not_replayed_twice() -> None:
+    """The CLI repeats each streamed message as a finished `assistant` record."""
+    events = drive(
+        [
+            stream({"type": "message_start", "message": {"id": "msg_1", "role": "assistant", "content": []}}),
+            stream({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            stream({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}}),
+            {
+                "type": "assistant",
+                "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+            },
+            stream({"type": "content_block_stop", "index": 0}),
+            {"type": "result", "is_error": False, "stop_reason": "end_turn"},
+        ],
+    )
+    text = "".join(e["delta"].get("text", "") for e in events if e["type"] == "content_block_delta")
+    assert text == "hi"

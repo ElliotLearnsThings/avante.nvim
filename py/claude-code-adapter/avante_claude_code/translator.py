@@ -87,6 +87,10 @@ class StreamTranslator:
         self._finished = False
         self._session_id: str | None = None
         self._next_index = 0
+        # Message ids seen as a live stream. Anything else the CLI reports as a
+        # finished assistant message was produced locally (a slash command such
+        # as /context) and never streamed, so it has to be replayed by hand.
+        self._streamed_message_ids: set[str] = set()
         # CLI block index -> our block index, for the message being streamed.
         self._index_map: dict[int, int] = {}
         # CLI block index -> accumulated partial JSON, for tool_use blocks.
@@ -115,6 +119,8 @@ class StreamTranslator:
             event = record.get("event")
             if isinstance(event, dict):
                 self._handle_stream_event(event)
+        elif kind == "assistant":
+            self._handle_unstreamed_assistant(record)
         elif kind == "user":
             self._handle_tool_results(record)
         elif kind == "result":
@@ -150,6 +156,9 @@ class StreamTranslator:
         # Later assistant messages in the same turn continue the merged one.
         self._index_map = {}
         self._tool_blocks = {}
+        message_id = (event.get("message") or {}).get("id")
+        if isinstance(message_id, str):
+            self._streamed_message_ids.add(message_id)
         if self._started:
             return
         self._started = True
@@ -210,6 +219,46 @@ class StreamTranslator:
             tool_input = {}
         self._emit_text(_render_call(str(pending["name"]), tool_input))
 
+    def _handle_unstreamed_assistant(self, record: dict[str, Any]) -> None:
+        """
+        Replay an assistant message that never came through as stream events.
+
+        Claude Code answers its local slash commands itself, emitting a finished
+        assistant message with no ``message_start``. Without this the reply would
+        be silently dropped.
+        """
+        message = record.get("message") or {}
+        message_id = message.get("id")
+        if isinstance(message_id, str) and message_id in self._streamed_message_ids:
+            return
+        content = message.get("content")
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                text = str(block.get("text") or "")
+                if text:
+                    self._ensure_started(message)
+                    self._emit_text(text)
+            elif block.get("type") == "tool_use" and self._emit_tool_activity:
+                self._ensure_started(message)
+                tool_input = block.get("input")
+                self._emit_text(_render_call(str(block.get("name") or "tool"), tool_input if isinstance(tool_input, dict) else {}))
+
+    def _ensure_started(self, message: dict[str, Any] | None = None) -> None:
+        """Open the merged message if nothing has opened it yet."""
+        if self._started:
+            return
+        self._started = True
+        started = dict(message or {})
+        started["content"] = []
+        started["stop_reason"] = None
+        started.setdefault("role", "assistant")
+        started.setdefault("type", "message")
+        self._writer.emit({"type": "message_start", "message": started})
+
     def _handle_tool_results(self, record: dict[str, Any]) -> None:
         if not self._emit_tool_activity or not self._started:
             return
@@ -256,14 +305,7 @@ class StreamTranslator:
         if self._finished:
             return
         self._finished = True
-        if not self._started:
-            self._started = True
-            self._writer.emit(
-                {
-                    "type": "message_start",
-                    "message": {"type": "message", "role": "assistant", "content": [], "stop_reason": None},
-                },
-            )
+        self._ensure_started()
         for index in sorted(self._index_map.values()):
             self._writer.emit({"type": "content_block_stop", "index": index})
         self._index_map = {}
