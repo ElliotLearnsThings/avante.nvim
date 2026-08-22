@@ -176,6 +176,32 @@ function M:setup()
   require("avante.tokenizers").setup(M.tokenizer_id)
 end
 
+--- The Claude Code command a submission invokes, if it invokes one.
+---
+--- Claude Code only resolves a slash command when the message *starts* with
+--- "/", but agentic mode wraps submissions in <task> tags and Avante prepends
+--- context messages, so by the time the CLI sees it the "/" is buried.
+---@param messages AvanteLLMMessage[]
+---@return string | nil
+local function slash_command(messages)
+  for index = #messages, 1, -1 do
+    local message = messages[index]
+    if message.role == "user" then
+      local text = content_to_text(message.content)
+      -- Agentic mode wraps the user's own words; unwrap before looking.
+      text = text:gsub("^%s*<task>(.-)</task>%s*$", "%1")
+      text = vim.trim(text)
+      local name = text:match("^/([%w_%-]+)")
+      if name == nil then return nil end
+      for _, available in ipairs(M._capabilities.slash_commands or {}) do
+        if available == name then return text end
+      end
+      return nil
+    end
+  end
+  return nil
+end
+
 ---@param opts AvantePromptOptions
 ---@return table[]
 function M:parse_messages(opts)
@@ -236,6 +262,11 @@ function M:parse_subprocess_args(prompt_opts, curl_opts)
   end
 
   local messages = self:parse_messages(prompt_opts)
+
+  -- A native command is a directive to the CLI, not a chat message, so it goes
+  -- on its own: no context ahead of it, and nothing wrapped around it.
+  local command = slash_command(prompt_opts.messages)
+  if command then messages = { { role = "user", content = command } } end
 
   -- Avante's tools are handed to Claude Code over the MCP bridge and executed
   -- back inside Neovim, so the sidebar keeps its diff review and confirmations.

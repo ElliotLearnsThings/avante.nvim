@@ -1008,4 +1008,48 @@ describe("claude_code provider", function()
       assert.are.same(builtin_names(), command_names(Utils.get_commands()))
     end)
   end)
+
+  describe("native slash commands", function()
+    it("sends a known command unwrapped and without context ahead of it", function()
+      -- Agentic mode wraps submissions in <task>, which buried the leading "/"
+      -- and stopped Claude Code from ever resolving the command.
+      ClaudeCode._capabilities.slash_commands = { "context", "compact" }
+      local provider = make_provider()
+      local spec = provider:parse_subprocess_args({
+        system_prompt = "sys",
+        messages = {
+          { role = "user", content = "<context>some project context</context>" },
+          { role = "user", content = "<task>/context</task>" },
+        },
+      })
+      local request = vim.json.decode(spec.stdin)
+      assert.are.same(1, #request.messages)
+      assert.are.same("/context", request.messages[1].content)
+    end)
+
+    it("leaves an unknown command as an ordinary message", function()
+      ClaudeCode._capabilities.slash_commands = { "context" }
+      local provider = make_provider()
+      local spec = provider:parse_subprocess_args({
+        system_prompt = "sys",
+        messages = {
+          { role = "user", content = "<context>ctx</context>" },
+          { role = "user", content = "<task>/notacommand please</task>" },
+        },
+      })
+      local request = vim.json.decode(spec.stdin)
+      assert.is_true(#request.messages > 1)
+    end)
+
+    it("leaves ordinary prose alone", function()
+      ClaudeCode._capabilities.slash_commands = { "context" }
+      local provider = make_provider()
+      local spec = provider:parse_subprocess_args({
+        system_prompt = "sys",
+        messages = { { role = "user", content = "<task>what does 20/20 mean</task>" } },
+      })
+      local request = vim.json.decode(spec.stdin)
+      assert.are.same("<task>what does 20/20 mean</task>", request.messages[1].content)
+    end)
+  end)
 end)
