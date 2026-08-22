@@ -4,46 +4,111 @@
 </div>
 
 <p align="center">
-  <a href="https://neovim.io/" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=Neovim&message=v0.10%2b&logo=neovim&labelColor=282828&logoColor=8faa80&color=414b32" alt="Neovim: v0.10+" /></a>
-  <a href="https://github.com/yetone/avante.nvim/actions/workflows/tests.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/yetone/avante.nvim/tests.yaml?style=flat-square&logo=lua&logoColor=c7c7c7&label=Lua+CI&labelColor=1E40AF&color=347D39&event=push" alt="Lua CI status" /></a>
-  <a href="https://github.com/yetone/avante.nvim/actions/workflows/rust.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/yetone/avante.nvim/rust.yaml?style=flat-square&logo=rust&logoColor=ffffff&label=Rust+CI&labelColor=BC826A&color=347D39&event=push" alt="Rust CI status" /></a>
-  <a href="https://github.com/yetone/avante.nvim/actions/workflows/pre-commit.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/yetone/avante.nvim/pre-commit.yaml?style=flat-square&logo=pre-commit&logoColor=ffffff&label=pre-commit&labelColor=FAAF3F&color=347D39&event=push" alt="pre-commit status" /></a>
-  <a href="https://discord.gg/QfnEFEdSjz" target="_blank"><img src="https://img.shields.io/discord/1302530866362323016?style=flat-square&logo=discord&label=Discord&logoColor=ffffff&labelColor=7376CF&color=268165" alt="Discord" /></a>
-  <a href="https://dotfyle.com/plugins/yetone/avante.nvim"><img src="https://dotfyle.com/plugins/yetone/avante.nvim/shield?style=flat-square" /></a>
+  <a href="https://neovim.io/" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=Neovim&message=v0.11%2b&logo=neovim&labelColor=282828&logoColor=8faa80&color=414b32" alt="Neovim: v0.11+" /></a>
+  <a href="https://claude.com/claude-code" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=engine&message=Claude%20Code%20CLI&logo=anthropic&labelColor=282828&logoColor=d97757&color=a8563a" alt="Engine: Claude Code CLI" /></a>
+  <a href="https://github.com/ElliotLearnsThings/avante.nvim/actions/workflows/tests.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/ElliotLearnsThings/avante.nvim/tests.yaml?style=flat-square&logo=lua&logoColor=c7c7c7&label=Lua+CI&labelColor=1E40AF&color=347D39&event=push" alt="Lua CI status" /></a>
+  <a href="https://github.com/ElliotLearnsThings/avante.nvim/actions/workflows/rust.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/ElliotLearnsThings/avante.nvim/rust.yaml?style=flat-square&logo=rust&logoColor=ffffff&label=Rust+CI&labelColor=BC826A&color=347D39&event=push" alt="Rust CI status" /></a>
+  <a href="https://github.com/ElliotLearnsThings/avante.nvim/actions/workflows/pre-commit.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/ElliotLearnsThings/avante.nvim/pre-commit.yaml?style=flat-square&logo=pre-commit&logoColor=ffffff&label=pre-commit&labelColor=FAAF3F&color=347D39&event=push" alt="pre-commit status" /></a>
+  <a href="https://github.com/yetone/avante.nvim" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=fork%20of&message=yetone/avante.nvim&logo=github&labelColor=282828&logoColor=ffffff&color=6f42c1" alt="Fork of yetone/avante.nvim" /></a>
 </p>
 
 **avante.nvim** 是一个 Neovim 插件，旨在模拟 [Cursor](https://www.cursor.com) AI IDE 的行为。它为用户提供 AI 驱动的代码建议，并能够轻松地将这些建议直接应用到源文件中。
 
+**本仓库是一个分支。** 它保留了上述全部能力，只是换掉了底层引擎：不再访问十几个 HTTP 模型 API，而是驱动**原生的 [Claude Code CLI](https://claude.com/claude-code)**，并通过 MCP 桥接把 avante 自己的工具交还给它，让这些工具仍旧在 Neovim 内部执行。
+
 [View in English](README.md)
 
-> [!NOTE]
+> [!IMPORTANT]
 >
-> 🥰 该项目正在快速迭代中，许多令人兴奋的功能将陆续添加。敬请期待！
+> **`ElliotLearnsThings/avante.nvim` 是 [yetone/avante.nvim](https://github.com/yetone/avante.nvim) 的硬分支（hard fork），而不是它的超集。**
+>
+> 整个提供者层已经被替换成唯一的一个提供者 `claude_code`。`openai`、`claude`、`copilot`、
+> `gemini`、`ollama`、`azure`、`bedrock`、`vertex`、`cohere`、`watsonx_code_assistant`
+> 以及它们所有仅存在于配置中的别名都已被**移除**——为上游写的 `setup()` 配置在这里无法
+> 工作。这里也没有 API 密钥需要配置：认证完全由 Claude Code CLI 负责。
+>
+> 安装之前请先阅读[关于本分支](#关于本分支)。
 
 <https://github.com/user-attachments/assets/510e6270-b6cf-459d-9a2f-15b397d1fe53>
 
 <https://github.com/user-attachments/assets/86140bfd-08b4-483d-a887-1b701d9e37dd>
 
-## 赞助 ❤️
+## 关于本分支
 
-如果您喜欢这个项目，请考虑在 Patreon 上支持我，因为这有助于我继续维护和改进它：
+上游 avante.nvim 通过 HTTP 访问模型，并为每一家厂商提供一个 provider。本分支把它们全部
+移除，改用唯一的一个提供者 `claude_code`，直接驱动您已经装好的 Claude Code CLI：
 
-[赞助我](https://patreon.com/yetone)
+- **由 CLI 跑完整轮对话。** avante 通过一个小巧、无第三方依赖的 Python 适配器
+  （`py/claude-code-adapter`）启动 `claude --print`，并把结果流式送回侧边栏。您的
+  Claude Code 订阅、`CLAUDE.md` 发现机制、skills、插件、MCP 服务器和权限模式都一并带过来。
+- **avante 自己的工具依然在 Neovim 里执行。** 它们会以 MCP 服务器的形式重新提供给
+  Claude Code，模型发起的调用被转发回编辑器，因此 diff 审阅、内联权限按钮、todos 容器、
+  RAG 检索和 Web 搜索的行为都和以前完全一样。模型能调用哪一套工具由
+  [工具模式 tools_mode](#工具模式-tools_mode) 决定。
+- **没有 API 密钥。** 唯一涉及的凭据就是 `claude auth`，avante 永远不会向您索要密钥。
+
+|              | 上游 `yetone/avante.nvim`                | 本分支                                                   |
+| ------------ | ---------------------------------------- | -------------------------------------------------------- |
+| 提供者       | 约 12 个 HTTP 提供者及其别名             | 只有一个：`claude_code`                                  |
+| 凭据         | 每个提供者一份 API 密钥                  | `claude auth`，任何地方都不需要密钥                      |
+| 传输         | 用 `curl` 访问 HTTP 端点                 | 子进程 → Python 适配器 → `claude --print`                 |
+| 工具         | avante 的工具，在 Neovim 中执行          | avante 的工具、Claude Code 的工具，或两者——见 `tools_mode` |
+| 斜杠命令     | 只有 avante 自己的                       | avante 的，外加 Claude Code 的命令、skills 和插件命令    |
+| 会话         | 每轮都重发整个对话记录                   | 在多轮之间恢复 CLI 会话，保持提示词缓存有效              |
+| ACP 智能体   | 默认带一个包装第三方 npm shim 的 `claude-code` 条目 | `acp_providers = {}`，需要时自行配置             |
+
+除此之外的一切都来自上游，并且和过去一样在下文中有文档：侧边栏、键绑定、`avante.md`
+项目说明、自定义工具、自定义提示词、MCP 支持以及 RAG 服务。
+
+各部分如何拼在一起见[架构](#架构)一节；每一处改动背后的理由——包括那些被考虑过又被否决
+的设计——记录在 [DECISIONS.md](./DECISIONS.md) 中。
 
 ## 功能
 
+- **在 Neovim 中驱动原生 Claude Code**：每一轮都由真正的 `claude` 可执行文件执行，
+  因此 CLI 在终端里能做的事，在侧边栏里同样能做。
+- **avante 的工具被桥接回编辑器**：文件改动依旧会进入 avante 的 diff 审阅，可以内联
+  接受或拒绝；确认流程、todos、RAG 检索和 Web 搜索也都照常工作。
 - **AI 驱动的代码辅助**：与 AI 互动，询问有关当前代码文件的问题，并接收智能建议以进行改进或修改。
 - **一键应用**：通过单个命令快速将 AI 的建议更改应用到源代码中，简化编辑过程并节省时间。
+- **项目级说明文件**：在项目根目录放一个 markdown 文件（默认是 `avante.md`）即可定制 AI 的行为。
+- **Claude Code 自己的扩展面**：它的斜杠命令、skills 和插件会和 avante 的一起出现在输入框中。
+- **无需管理 API 密钥**：认证交给 CLI，并且会在多轮之间恢复会话，而不是重放整个对话记录。
+
+## 赞助 ❤️
+
+本分支能够存在，全靠 [yetone](https://github.com/yetone) 的工作。如果 avante.nvim 对您
+有帮助，请考虑赞助上游作者——这里的一切都建立在他维护的插件之上：
+
+[赞助 yetone](https://patreon.com/yetone)
 
 ## 安装
 
 如果您希望从源代码构建二进制文件，则需要 `cargo`。否则，将使用 `curl` 和 `tar` 从 GitHub 获取预构建的二进制文件。
 
-> [!IMPORTANT]
+### 先决条件
+
+请先按顺序完成下面三件事，其中没有任何一步需要 API 密钥。
+
+1. **安装 Claude Code CLI**：从 <https://claude.com/claude-code> 安装，并确保 `claude`
+   在 `$PATH` 中——`claude --version` 应该能给出回答。如果您把它放在了别的地方，请改用
+   `providers.claude_code.cli_path` 指向它。
+2. **登录一次**：在终端里执行 `claude auth login`，或者在插件装好之后执行
+   `:AvanteClaudeCodeAuth`，它会在终端分屏中打开同一个交互式流程。`claude auth status`
+   应当显示您已登录。这里没有 `ANTHROPIC_API_KEY` 需要导出，也不需要在 shell 配置里写
+   任何东西；您在终端里 `claude` 能用什么，avante 就用什么。
+3. **确保 `$PATH` 中有 Python 3.9 或更高版本**：自带的适配器（`py/claude-code-adapter`）
+   只使用标准库编写——不需要 `pip install`，不需要创建虚拟环境，也不需要 `uv sync`。
+   如果您的解释器不叫 `python3` 或 `python`，请设置
+   `providers.claude_code.python_path`。
+
+然后**从本分支**安装插件——是 `ElliotLearnsThings/avante.nvim`，不是
+`yetone/avante.nvim`——插件管理器任选。需要 Neovim 0.11.0 或更高版本。
+
+> [!TIP]
 >
-> avante 直接驱动原生的 [Claude Code CLI](#提供者)。请从
-> <https://claude.com/claude-code> 安装它，执行一次 `claude auth` 登录，并确保
-> `$PATH` 中有 Python 3.9 或更高版本。无需配置任何 API 密钥。
+> 安装完成后，执行 `:AvanteClaudeCodeStatus`（或 `:checkhealth avante`）确认 CLI、Python
+> 解释器和登录状态都在 avante 期待的位置上。
 
 <details open>
 
@@ -51,7 +116,7 @@
 
 ```lua
 {
-  "yetone/avante.nvim",
+  "ElliotLearnsThings/avante.nvim",
   -- 如果您想从源代码构建，请执行 `make BUILD_FROM_SOURCE=true`
   -- ⚠️ 一定要加上这一行配置！！！！！
   build = vim.fn.has("win32") ~= 0
@@ -68,6 +133,7 @@
     providers = {
       claude_code = {
         model = "sonnet",
+        tools_mode = "avante", -- avante 自己的工具，在 Neovim 内部执行
         permission_mode = "acceptEdits",
       },
     },
@@ -118,6 +184,8 @@
 
 ```vim
 
+call plug#begin()
+
 " 依赖项
 Plug 'nvim-lua/plenary.nvim'
 Plug 'MunifTanjim/nui.nvim'
@@ -127,9 +195,13 @@ Plug 'MeanderingProgrammer/render-markdown.nvim'
 Plug 'hrsh7th/nvim-cmp'
 Plug 'nvim-tree/nvim-web-devicons' "或 Plug 'echasnovski/mini.icons'
 Plug 'HakonHarnes/img-clip.nvim'
+Plug 'folke/snacks.nvim' " 更现代的输入界面
 
 " Yay，如果您想从源代码构建，请传递 source=true
-Plug 'yetone/avante.nvim', { 'branch': 'main', 'do': 'make' }
+Plug 'ElliotLearnsThings/avante.nvim', { 'branch': 'main', 'do': 'make' }
+
+call plug#end()
+
 autocmd! User avante.nvim lua << EOF
 require('avante').setup()
 EOF
@@ -145,7 +217,7 @@ EOF
 local add, later, now = MiniDeps.add, MiniDeps.later, MiniDeps.now
 
 add({
-  source = 'yetone/avante.nvim',
+  source = 'ElliotLearnsThings/avante.nvim',
   monitor = 'main',
   depends = {
     'nvim-lua/plenary.nvim',
@@ -186,7 +258,7 @@ end)
 
   -- Avante.nvim 带有构建过程
   use {
-    'yetone/avante.nvim',
+    'ElliotLearnsThings/avante.nvim',
     branch = 'main',
     run = 'make',
     config = function()
@@ -291,8 +363,8 @@ _请参见 [config.lua#L9](./lua/avante/config.lua) 以获取完整配置_
   -- ACP 条目，因此默认不提供任何 ACP 智能体。
   acp_providers = {},
   providers = {
-    --- 原生 Claude Code CLI，通过 `py/claude-code-adapter` 中的 Python 适配器驱动。
-    --- 详见下文的“提供者”一节。
+    --- 唯一内置的提供者：原生 Claude Code CLI，通过 `py/claude-code-adapter` 中的
+    --- Python 适配器驱动。详见下文的“提供者”一节。
     claude_code = {
       display_name = "Claude Code",
       model = "sonnet", -- 模型别名（"opus"、"sonnet"、"haiku"）或完整的模型名称
@@ -309,6 +381,13 @@ _请参见 [config.lua#L9](./lua/avante/config.lua) 以获取完整配置_
       add_dirs = {}, -- 允许 Claude Code 访问的额外目录
       mcp_config = {}, -- MCP 服务器配置文件路径或 JSON 字符串
       strict_mcp_config = false, -- 忽略所有未在 `mcp_config` 中列出的 MCP 服务器
+      -- Claude Code 插件，仅在本次会话中加载，叠加在 `claude plugin install`
+      -- 已经全局安装好的插件之上
+      plugin_dirs = {},
+      plugin_urls = {},
+      -- Claude Code 自己的斜杠命令会和 avante 的一起出现在输入框中。
+      -- 设为 true 则只保留 avante 自己的
+      disable_slash_commands = false,
       settings = nil, -- 设置文件路径或 JSON 字符串
       setting_sources = nil, -- 需要加载的设置来源
       agents = nil, -- 自定义 agent 定义，JSON 字符串
@@ -323,8 +402,17 @@ _请参见 [config.lua#L9](./lua/avante/config.lua) 以获取完整配置_
       env = {}, -- 传给 CLI 的额外环境变量
       timeout = 0, -- 超过该毫秒数后中止本轮对话。0 表示不限制
       context_window = 200000,
-      disable_tools = true, -- Claude Code 自带工具，Avante 的工具会重复执行
+      -- 模型可以调用谁的工具：
+      --   "avante" -- avante 自己的工具，经 MCP 桥接在 Neovim 内部执行，
+      --              diff 审阅、确认、todos、RAG 和 Web 搜索都照旧工作
+      --   "native" -- Claude Code 的内置工具，直接把改动写入磁盘
+      --   "both"   -- 两套都用，代价是能力互相重叠
+      tools_mode = "avante",
+      -- 与 `tools_mode` 保持一致：只有真的会有人调用时，avante 才构建工具列表。
+      -- 使用 tools_mode = "native" 时请同时设为 true
+      disable_tools = false,
     },
+  },
   },
   ---指定特殊的 dual_boost 模式
   ---1. enabled: 是否启用 dual_boost 模式。默认为 false。
@@ -461,22 +549,29 @@ _请参见 [config.lua#L9](./lua/avante/config.lua) 以获取完整配置_
 
 Avante 只有一个内置提供者：`claude_code`。它并不调用 HTTP API，而是通过插件自带的
 一个小型 Python 适配器（`py/claude-code-adapter`）驱动**原生的 Claude Code CLI**。
-适配器会运行 `claude --print --output-format stream-json`，把 CLI 的整个 agent 循环
-合并成一条助手消息，再以 Anthropic Messages API 事件的形式发出，因此侧边栏、聊天
-历史和 token 统计的行为都和以前完全一致。
+适配器会运行 `claude --print --input-format stream-json --output-format stream-json`，
+把 CLI 的整个 agent 循环合并成一条助手消息，再以 Anthropic Messages API 事件的形式
+发出，因此侧边栏、聊天历史和 token 统计的行为都和以前完全一致。
+
+在这个过程中 avante 自己的工具并没有被丢掉：它们会以一个 MCP 服务器的形式重新提供给
+Claude Code，模型发起的每一次调用都会被转发回 Neovim，由 avante 的执行器在编辑器内
+真正执行。详见下文的[工具模式 tools_mode](#工具模式-tools_mode)，以及[架构](#架构)
+一节。
 
 ### 设置
 
+完整的前置条件见[安装](#先决条件)一节，简单来说：
+
 1. **安装 Claude Code CLI**：从 <https://claude.com/claude-code> 安装，然后执行一次
-   `claude auth` 登录。认证完全由 CLI 负责：avante 既不会读取也不会提示输入 API
-   密钥，也不需要导出 `ANTHROPIC_API_KEY`。您在终端里 `claude` 能用什么，avante 就
-   用什么。如果该可执行文件不在 `$PATH` 中，请用 `cli_path` 指定它。
+   `claude auth login`（或在 Neovim 中执行 `:AvanteClaudeCodeAuth`）登录。认证完全由
+   CLI 负责：avante 既不会读取也不会提示输入 API 密钥，也不需要导出
+   `ANTHROPIC_API_KEY`。如果该可执行文件不在 `$PATH` 中，请用 `cli_path` 指定它。
 2. **确保 `$PATH` 中有 Python 3.9 或更高版本**：自带的适配器只使用标准库编写——不需要
    `pip install`，也不需要创建虚拟环境。如果您的解释器不叫 `python3` 或 `python`，
    请设置 `python_path`。
 
 设置到此为止。即使 `require("avante").setup({})` 不带任何选项，也已经可以和
-Claude Code 对话了：
+Claude Code 对话了；下面这段配置只是把默认值明确写出来，方便您看清自己拿到的是什么：
 
 ```lua
 require("avante").setup({
@@ -484,28 +579,56 @@ require("avante").setup({
   providers = {
     claude_code = {
       model = "sonnet",
+      tools_mode = "avante",
       permission_mode = "acceptEdits",
     },
   },
 })
 ```
 
-### Claude Code 运行自己的工具
+### 工具模式 tools_mode
 
-这是最需要理解的一处行为差异。Claude Code 拥有完整的 agent 循环：它会自己读取文件、
-搜索、执行命令，并且**直接把改动写入磁盘**，只有在整轮任务结束后才把结果返回给
-avante。由此带来两个结果：
+这个插件里有两套完整的工具：avante 自己的工具（在 Neovim 内部执行）和 Claude Code 的
+内置工具（在 CLI 进程中执行）。`tools_mode` 决定模型可以调用其中的哪一套。
 
-- 对该提供者，avante 自己的工具执行器是关闭的（默认 `disable_tools = true`），因此
-  同一个工具不会被执行两次。Claude Code 的工具调用会作为活动记录直接渲染在侧边栏中，
-  而不会再交给 avante 的工具执行器。
-- avante 的 diff 审阅流程不会拦在 Claude Code 的改动之前——响应到达时，文件其实已经
-  被修改了。请把 `git`（以及 `permission_mode`）当作您的安全网。
+| 取值       | 模型看到的工具               | 执行位置              | 您得到的体验                                                             |
+| ---------- | ---------------------------- | --------------------- | ------------------------------------------------------------------------ |
+| `"avante"` | 只有 avante 的工具（**默认**） | Neovim 内部，经 MCP 桥接 | diff 审阅、内联权限按钮、todos 容器、RAG 检索与 Web 搜索                 |
+| `"native"` | 只有 Claude Code 的内置工具   | CLI 进程中            | Claude Code 自己的 Read/Edit/Write/Bash/Grep，直接把改动写入磁盘          |
+| `"both"`   | 两套工具同时提供             | 两边都有              | 什么都能做，代价是同一件事有两种重叠的做法                               |
+
+**`"avante"`——默认值。** avante 的工具 schema 会以 MCP 服务器的形式交给 Claude Code，
+每一次 `tools/call` 都会被桥接回 Neovim，由真正的 Lua 工具执行。实际效果是：这个模式
+让插件用起来仍然是 avante——文件改动会作为可审阅的 diff 出现在侧边栏，并且可以用快捷键
+接受或拒绝；需要确认的工具会画出内联按钮；todos 容器会被填满；`@codebase`/RAG 检索和
+Web 搜索也和以前一样工作。本轮对话中 Claude Code 自己的内置工具会被关闭——只要您没有自己
+设置 `tools`，适配器就会传入 `--tools ""`——因此文件不会在您不知情的情况下被写入，也不会
+有工具被执行两次。
+
+**`"native"`。** Claude Code 使用自己的工具，**直接把改动写入磁盘**，并且只有在整轮
+任务结束后才把结果返回给 avante。avante 的 diff 审阅不会拦在这些改动之前——响应到达时
+文件其实已经被修改了，所以 `git` 和 `permission_mode` 才是您的安全网。作为交换，您得到
+的正是 CLI 在终端里的行为：在大规模、机械性的重构上更快，而这也正是 Claude Code 自身
+被调优的场景。使用该模式时请同时设置 `disable_tools = true`，免得 avante 白白花费提示
+词 token 去描述永远不会被调用的工具。
+
+**`"both"`。** 两套工具都提供。适合既想要 avante 可审阅的改动，又想用 Claude Code 自己
+的 `Bash` 之类的场景。此时模型会有两种方式读文件、两种方式写文件，具体选哪一种由它自己
+决定——因此行为会比只用其中一套时更难预测。
+
+```lua
+providers = {
+  claude_code = {
+    tools_mode = "avante", -- "avante" | "native" | "both"
+    disable_tools = false, -- 仅在 tools_mode = "native" 时设为 true
+  },
+}
+```
 
 ### 权限模式
 
-因此 `permission_mode` 才是真正起作用的安全开关。它会被原样传给
-`claude --permission-mode`，所以以 CLI 自身的文档为准，简单来说：
+`permission_mode` 会被原样传给 `claude --permission-mode`，所以以 CLI 自身的文档为准，
+简单来说：
 
 | 取值                | 行为                                                                       |
 | ------------------- | -------------------------------------------------------------------------- |
@@ -516,48 +639,62 @@ avante。由此带来两个结果：
 | `dontAsk`           | Claude Code 不再弹出权限询问，直接继续执行。                               |
 | `auto`              | 由 Claude Code 在执行过程中自行决定需要多少授权。                          |
 
+它管的是 **Claude Code 自己的工具**，因此只有在 `tools_mode = "native"` 或 `"both"` 时
+才真正起作用。在默认的 `tools_mode = "avante"` 下，这些内置工具本就被完全关闭，真正决定
+一个动作能否发生的是 avante 自己的确认流程——内联权限按钮、diff 审阅，以及
+`behaviour.auto_approve_tool_permissions`。
+
 avante 以非交互方式驱动 CLI，因此那些本来会停下来询问的模式无法从侧边栏得到回答——
 Claude Code 会直接拒绝该操作，而不是一直等待。这正是默认使用 `acceptEdits` 的原因。
 如果您希望先看清一个请求会做什么，再决定是否落地，请从 `plan` 开始。
 
 ### 配置项
 
-以下配置项都位于 `providers.claude_code` 下：
+以下配置项都位于 `providers.claude_code` 下。最权威的清单是
+[`lua/avante/config.lua`](./lua/avante/config.lua) 中的默认值。
 
-| 配置项               | 类型                   | 说明                                                                             |
-| -------------------- | ---------------------- | -------------------------------------------------------------------------------- |
-| `model`              | `string`               | 模型别名（`"opus"`、`"sonnet"`、`"haiku"`）或完整模型名称。默认 `"sonnet"`。      |
-| `cli_path`           | `string`               | `claude` 可执行文件。裸名称会在 `$PATH` 中查找，绝对路径则直接使用。             |
-| `python_path`        | `string?`              | 运行适配器的解释器。未设置时会自动从 `python3`/`python` 探测。                    |
-| `permission_mode`    | `string`               | Claude Code 的行为尺度，见上表。默认 `"acceptEdits"`。                           |
-| `tools`              | `string[]?`            | Claude Code 可以使用的内置工具。`nil` 表示使用其默认工具集，`{}` 表示全部禁用。   |
-| `allowed_tools`      | `string[]?`            | 显式允许的工具，例如只读会话可用 `{ "Read", "Grep", "Glob" }`。                   |
-| `disallowed_tools`   | `string[]?`            | 显式禁止的工具，例如 `{ "Bash" }`。                                              |
-| `add_dirs`           | `string[]`             | 除 `cwd` 之外，允许 Claude Code 访问的额外目录。                                 |
-| `mcp_config`         | `string[]`             | MCP 服务器配置文件路径或 JSON 字符串，每一项对应一个 `--mcp-config`。            |
-| `strict_mcp_config`  | `boolean`              | 忽略所有未在 `mcp_config` 中列出的 MCP 服务器。默认 `false`。                    |
-| `plugin_dirs`        | `string[]`             | Claude Code 插件目录或 `.zip` 文件，仅在本次会话中加载。                         |
-| `plugin_urls`        | `string[]`             | Claude Code 插件 `.zip` 文件的 URL，仅在本次会话中加载。                         |
-| `disable_slash_commands` | `boolean`          | 只提供 avante 自己的斜杠命令，不提供 Claude Code 的。默认 `false`。              |
-| `settings`           | `string?`              | Claude Code 的设置文件路径或 JSON 字符串。                                       |
-| `setting_sources`    | `string?`              | CLI 需要加载的设置来源。                                                         |
-| `agents`             | `string?`              | 自定义 agent 定义，JSON 字符串。                                                 |
-| `effort`             | `string?`              | 推理强度：`"low"`、`"medium"`、`"high"`、`"xhigh"` 或 `"max"`。                  |
-| `fallback_model`     | `string?`              | 主模型过载时回退使用的模型。                                                     |
-| `max_budget_usd`     | `number?`              | 单轮对话的花费上限（美元）。                                                     |
-| `cwd`                | `string?`              | Claude Code 的工作目录，它的工具都被限制在该目录内。默认为项目根目录。           |
-| `stateful`           | `boolean`              | 在多轮之间恢复 Claude Code 会话，而不是重放整个对话记录。默认 `true`。           |
-| `emit_tool_activity` | `boolean`              | 在侧边栏中显示 Claude Code 自己的工具调用与结果。默认 `true`。                   |
-| `extra_args`         | `string[]`             | 原样追加到 CLI 调用后面的参数——用于承载这里没有建模的一切能力。                  |
-| `env`                | `table<string,string>` | 传给 CLI 进程的额外环境变量。                                                    |
-| `timeout`            | `number`               | 超过该毫秒数后中止本轮对话。默认 `0`，表示不限制。                                 |
+| 配置项                   | 类型                   | 说明                                                                             |
+| ------------------------ | ---------------------- | -------------------------------------------------------------------------------- |
+| `model`                  | `string`               | 模型别名（`"opus"`、`"sonnet"`、`"haiku"`）或完整模型名称。默认 `"sonnet"`。      |
+| `model_names`            | `string[]`             | `:AvanteModels` 中列出的模型。默认 `{ "opus", "sonnet", "haiku" }`。              |
+| `display_name`           | `string`               | 在侧边栏和提供者选择器中显示的名称。默认 `"Claude Code"`。                        |
+| `cli_path`               | `string`               | `claude` 可执行文件。裸名称会在 `$PATH` 中查找，路径则直接使用。默认 `"claude"`。 |
+| `python_path`            | `string?`              | 运行适配器的解释器。未设置时会自动从 `python3`/`python` 探测。                    |
+| `tools_mode`             | `string`               | 模型可以调用谁的工具：`"avante"`（默认）、`"native"` 或 `"both"`，见上文。        |
+| `disable_tools`          | `boolean`              | 让 avante 干脆不构建工具列表。默认 `false`；配合 `tools_mode = "native"` 设为 `true`。 |
+| `permission_mode`        | `string`               | Claude Code 自己的工具能有多大自由度，见上表。默认 `"acceptEdits"`。              |
+| `tools`                  | `string[]?`            | Claude Code 可以使用的内置工具。`nil` 表示使用其默认工具集，`{}` 表示全部禁用。   |
+| `allowed_tools`          | `string[]?`            | 显式允许的内置工具，例如只读会话可用 `{ "Read", "Grep", "Glob" }`。               |
+| `disallowed_tools`       | `string[]?`            | 显式禁止的内置工具，例如 `{ "Bash" }`。                                          |
+| `add_dirs`               | `string[]`             | 除 `cwd` 之外，允许 Claude Code 访问的额外目录。默认 `{}`。                       |
+| `mcp_config`             | `string[]`             | MCP 服务器配置文件路径或 JSON 字符串，每一项对应一个 `--mcp-config`。默认 `{}`。  |
+| `strict_mcp_config`      | `boolean`              | 忽略所有未在 `mcp_config` 中列出的 MCP 服务器。默认 `false`。                    |
+| `plugin_dirs`            | `string[]`             | Claude Code 插件目录或 `.zip` 文件，仅在本次会话中加载。默认 `{}`。               |
+| `plugin_urls`            | `string[]`             | Claude Code 插件 `.zip` 文件的 URL，仅在本次会话中加载。默认 `{}`。               |
+| `disable_slash_commands` | `boolean`              | 只提供 avante 自己的斜杠命令，不提供 Claude Code 的。默认 `false`。              |
+| `settings`               | `string?`              | Claude Code 的设置文件路径或 JSON 字符串。                                       |
+| `setting_sources`        | `string?`              | CLI 需要加载的设置来源，例如 `"user,project,local"`。                             |
+| `agents`                 | `string?`              | 自定义 agent 定义，JSON 字符串。                                                 |
+| `effort`                 | `string?`              | 推理强度：`"low"`、`"medium"`、`"high"`、`"xhigh"` 或 `"max"`。                  |
+| `fallback_model`         | `string?`              | 主模型过载时回退使用的模型。                                                     |
+| `max_budget_usd`         | `number?`              | 单轮对话的花费上限（美元）。                                                     |
+| `cwd`                    | `string?`              | Claude Code 的工作目录，它的工具都被限制在该目录内。默认为项目根目录。           |
+| `stateful`               | `boolean`              | 在多轮之间恢复 Claude Code 会话，而不是重放整个对话记录。默认 `true`。           |
+| `emit_tool_activity`     | `boolean`              | 在侧边栏中显示 Claude Code 自己的工具调用与结果。默认 `true`。                   |
+| `append_system_prompt`   | `string?`              | 追加到系统提示词后面的文本，对应 `--append-system-prompt`。                       |
+| `extra_args`             | `string[]`             | 原样追加到 CLI 调用后面的参数——用于承载这里没有建模的一切能力。                  |
+| `env`                    | `table<string,string>` | 传给 CLI 进程的额外环境变量。默认 `{}`。                                          |
+| `timeout`                | `number`               | 超过该**毫秒**数后中止本轮对话。默认 `0`，表示不限制。                            |
+| `context_window`         | `integer`              | avante 统计 token 时使用的上下文长度。默认 `200000`。                            |
 
-例如，一份只读的配置可以这样写：
+例如，一份依赖 Claude Code 自身工具的只读配置可以这样写：
 
 ```lua
 providers = {
   claude_code = {
     model = "opus",
+    tools_mode = "native",
+    disable_tools = true,
     permission_mode = "plan",
     allowed_tools = { "Read", "Grep", "Glob" },
   },
@@ -603,9 +740,67 @@ claude auth login     # 或在 Neovim 中执行 :AvanteClaudeCodeAuth
 claude auth status
 ```
 
-`:AvanteClaudeCodeAuth` 会在一个终端分屏中打开交互式登录流程。
-`:AvanteClaudeCodeStatus` 会报告 CLI 版本、您的登录方式、已安装的插件，以及有多少原生
-命令可用；`:checkhealth avante` 给出的信息也是一样的。
+`:AvanteClaudeCodeAuth` 会在一个终端分屏中打开交互式登录流程，因为登录需要一个真正的
+TTY。`:AvanteClaudeCodeStatus` 会报告 CLI 版本、您的登录方式、已安装的插件，以及有多少
+原生命令可用；`:checkhealth avante` 给出的信息也是一样的。两者背后都是适配器的 `--probe`
+模式，它只调用可以在本地解析的 CLI 子命令——不会发起任何对话，也不会消耗 token。
+
+## 架构
+
+在一轮对话中 Neovim 从不使用 HTTP。`llm.lua` 会根据
+`provider.transport == "subprocess"` 分支，由提供者构造一次进程调用而不是 curl 参数：
+描述本次请求的一个 JSON 对象被写入适配器的 stdin，适配器则在 stdout 上写回 Anthropic
+的 server-sent events。`parse_response` 之后的一切——agent 循环、历史记录、侧边栏渲染、
+token 统计——都保持原样，因为收到的字节和 `api.anthropic.com` 会发出的字节完全相同。
+
+适配器是一个只依赖标准库的 Python 程序。它把请求变成一条 `claude` 命令行，读取 CLI 的
+`stream-json` NDJSON，并把实际上是*一整个 agent 循环*的输出（多条助手消息，每条都有
+自己的 `message_start`/`message_stop`）合并成 avante 期待的那一条流式消息：重新编号
+content block 索引、累加 usage，并从 CLI 最后的 `result` 记录合成唯一一组终止用的
+`message_delta`/`message_stop`。
+
+工具则沿着相反的方向流动。当 `tools_mode` 为 `"avante"` 或 `"both"` 时，avante 的工具
+schema 会随请求一起送出；适配器通过 `--mcp-config` 给 Claude Code 挂上一个 MCP 服务器
+（`mcp_server.py`）。这个服务器本身不含任何工具逻辑——它只是把 `tools/list` 和
+`tools/call` 经由 Unix socket 转发给适配器，适配器随即发出 `avante_tool_call` 事件并
+阻塞，直到 Neovim 从 stdin 回答。真正的 Lua 工具在编辑器里执行，这正是 diff 审阅、
+权限询问和历史渲染依然有效的原因。
+
+```
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Neovim —— 侧边栏 · 历史 · diff 审阅 · todos                       │
+  │            avante.llm_tools（真正的 Lua 工具）                     │
+  └──────────────┬──────────────────────────────────────▲──────────────┘
+                 │ stdin：一个 JSON 请求，              │  stdout：Anthropic SSE
+                 │ 其后每行一个工具结果                 │  （外加 avante_session、
+                 │                                      │    avante_capabilities、
+                 │                                      │    avante_tool_call）
+  ┌──────────────▼──────────────────────────────────────┴──────────────┐
+  │  py/claude-code-adapter —— 只依赖标准库的 Python                   │
+  │    命令行构造 · StreamTranslator · bridge.py（Unix socket）        │
+  └──────────────┬──────────────────────────────────────▲──────────────┘
+                 │ claude --print                       │  stream-json NDJSON
+                 │ --input-format stream-json           │
+                 │ --output-format stream-json          │
+  ┌──────────────▼──────────────────────────────────────┴──────────────┐
+  │  claude —— 原生 Claude Code CLI                                    │
+  └──────────────┬──────────────────────────────────────▲──────────────┘
+                 │ stdio（JSON-RPC），由 CLI            │  工具的执行结果
+                 │ 根据 --mcp-config 启动               │
+  ┌──────────────▼──────────────────────────────────────┴──────────────┐
+  │  mcp_server.py —— 不含工具逻辑，只有一条通往适配器的 socket        │
+  └────────────────────────────────────────────────────────────────────┘
+
+  桥接工具调用的完整路径 —— 请求向下走，结果原路返回：
+
+    claude --stdio--> mcp_server --socket--> adapter --stdout--> Neovim
+                                                     <--stdin---
+```
+
+这些取舍背后的理由——为什么用 Python 适配器而不是纯 Lua、为什么选择 Anthropic SSE 而不是
+自定义协议、为什么走 MCP 而不是 ACP，以及一路上尝试过又被否决的方案——都记录在
+[DECISIONS.md](./DECISIONS.md) 中。适配器自身的协议则记录在
+[`py/claude-code-adapter/README.md`](./py/claude-code-adapter/README.md)。
 
 ## Blink.cmp 用户
 
@@ -755,8 +950,11 @@ Avante.nvim 提供了多个可以与 blink.cmp 集成的补全项：
 > [!IMPORTANT]
 >
 > 无需配置任何 API 密钥。avante 驱动的是 Claude Code CLI，认证由 CLI 自己完成——
-> 在终端里执行一次 `claude auth` 即可。完整的设置说明，以及决定 Claude Code
-> 修改文件自由度的 `permission_mode` 选项，请参见[提供者](#提供者)一节。
+> 在终端里执行一次 `claude auth login`，或在 Neovim 中执行 `:AvanteClaudeCodeAuth`
+> 即可。完整的设置说明请参见[提供者](#提供者)一节，其中
+> [工具模式 tools_mode](#工具模式-tools_mode) 决定一次改动是作为可审阅的 diff 出现在
+> 侧边栏，还是直接落到磁盘上；`permission_mode` 则决定 Claude Code 自己的工具有多大
+> 自由度。
 
 1. 在 Neovim 中打开代码文件。
 2. 使用 `:AvanteAsk` 命令查询 AI 关于代码的问题。
@@ -886,9 +1084,11 @@ return {
 ## 自定义提供者
 
 Avante 内置的提供者只有 `claude_code`，但您也可以创建自己的提供者：给它一个
-`__inherited_from` 属性来继承已有的提供者，或者自己实现 `parse_curl_args`。
+`__inherited_from` 属性来继承已有的提供者，或者自己实现 `parse_curl_args`（HTTP 端点），
+再或者像 `claude_code` 那样设置 `transport = "subprocess"` 并实现
+`parse_subprocess_args`（本地进程）。
 
-有关更多信息，请参见 [自定义提供者](https://github.com/yetone/avante.nvim/wiki/Custom-providers)。
+有关更多信息，请参见[自定义提供者](https://github.com/yetone/avante.nvim/wiki/Custom-providers)。
 
 ## ACP 支持
 
@@ -997,13 +1197,27 @@ web_search_engine = {
 
 ## 禁用工具
 
-对 `claude_code` 而言，avante 自己的工具执行器**默认就是关闭的**：CLI 自带 Read、
-Edit、Bash、Grep 等工具，两套工具同时启用会让每个操作执行两次。这就是默认提供者配置
-中 `disable_tools = true` 的含义。如果要限制 Claude Code 本身能做什么，请使用它的
-`tools`、`allowed_tools` 和 `disallowed_tools` 配置项，参见[提供者](#提供者)一节。
+到底存在哪一套工具，是由[工具模式 tools_mode](#工具模式-tools_mode) 决定的。本节讲的是
+另外两个开关：彻底关掉 avante 的工具机制，以及禁用单个工具。
 
-`disable_tools` 是按提供者生效的，因此无法处理工具的自定义提供者也可以用同样的方式
-关闭它：
+`disable_tools` 是按提供者生效的，并且要和 `tools_mode` 保持一致。它决定 avante 是否为
+一次请求构建工具列表，因此在默认的 `tools_mode = "avante"` 下必须保持 `false`——否则就
+没有任何工具可以桥接给 Claude Code。当您改用 `tools_mode = "native"` 时，请把它设为
+`true`，免得 avante 白白花费提示词 token 去描述永远不会被调用的工具：
+
+```lua
+providers = {
+  claude_code = {
+    tools_mode = "native", -- 由 Claude Code 自己的工具干活
+    disable_tools = true,  -- 因此 avante 不必再提供自己的工具
+  },
+}
+```
+
+如果要限制 Claude Code 内置工具能做什么，请改用它的 `tools`、`allowed_tools` 和
+`disallowed_tools` 配置项，参见[提供者](#提供者)一节。
+
+同一个配置项也可以让自定义提供者彻底不使用工具：
 
 ```lua
 providers = {
@@ -1014,7 +1228,9 @@ providers = {
 }
 ```
 
-如果您想为那些确实会使用 avante 工具的提供者禁止某些工具，可以仅禁用特定工具
+如果您想在保留其余工具的前提下禁止某几个 avante 工具——对任何会使用它们的提供者都有效，
+`claude_code` 也不例外——请在顶层的 `disabled_tools` 中列出它们（注意多了一个 `d`，这是
+另一个配置项）：
 
 ```lua
 {
@@ -1183,7 +1399,7 @@ Avante.nvim 可以通过其扩展模块与其他插件协同工作。下面是�
 
 ```lua
 {
-    "yetone/avante.nvim",
+    "ElliotLearnsThings/avante.nvim",
     event = "VeryLazy",
     keys = {
         {
@@ -1235,11 +1451,32 @@ Avante.nvim 可以通过其扩展模块与其他插件协同工作。下面是�
 
 ## 贡献
 
-欢迎为 avante.nvim 做出贡献！如果您有兴趣提供帮助，请随时提交拉取请求或打开问题。在贡献之前，请确保您的代码已经过彻底测试。
+欢迎贡献代码。与 Claude Code 提供者、Python 适配器或 MCP 工具桥接相关的 issue 和 pull
+request，请提交到[本分支](https://github.com/ElliotLearnsThings/avante.nvim)；其余的几乎
+都属于上游，提交到 [yetone/avante.nvim](https://github.com/yetone/avante.nvim) 可以让所有
+人受益。
 
-有关更多配方和技巧，请参见 [wiki](https://github.com/yetone/avante.nvim/wiki)。
+如果您要修改 Claude Code 集成的工作方式，请先阅读 [DECISIONS.md](./DECISIONS.md)——里面
+记录了哪些方案已经尝试过。
+
+更多配方和技巧，请参见上游 [wiki](https://github.com/yetone/avante.nvim/wiki)。
 
 ## 致谢
+
+### 上游项目：yetone/avante.nvim
+
+本项目是 **[yetone/avante.nvim](https://github.com/yetone/avante.nvim)** 的一个分支，
+并且是最直白意义上的衍生作品。侧边栏、diff 审阅、工具框架、历史与会话机制、模板系统、
+Rust crates、与 Neovim 的整合——提供者层之下几乎每一行代码——都出自
+[yetone](https://github.com/yetone) 以及 avante.nvim 的
+[贡献者们](https://github.com/yetone/avante.nvim/graphs/contributors)之手。本分支改变的
+只是「如何抵达模型」这一层；让这个插件值得使用的一切，在分叉之前就已经在那里了。
+
+如果 avante.nvim 对您有帮助，请为[上游仓库](https://github.com/yetone/avante.nvim)点星、
+赞助并贡献代码——插件是在那里维护的。凡是与 Claude Code 提供者无关的问题，几乎都属于上游，
+最好也在那里提出。
+
+### avante.nvim 自身参考过的项目
 
 我们要向以下开源项目的贡献者表示衷心的感谢，他们的代码为 avante.nvim 的开发提供了宝贵的灵感和参考：
 
@@ -1255,7 +1492,13 @@ Avante.nvim 可以通过其扩展模块与其他插件协同工作。下面是�
 
 这些项目的源代码的高质量和独创性在我们的开发过程中提供了极大的帮助。我们向这些项目的作者和贡献者表示诚挚的感谢和敬意。正是开源社区的无私奉献推动了像 avante.nvim 这样的项目向前发展。
 
+（上表原样保留自上游。其中指向的部分文件——例如 `lua/avante/providers/copilot.lua`——随着
+本分支替换掉的提供者层一起被移除了；表中的链接指向上游仓库，那里依然存在，这份致谢也一样
+成立。）
+
 ## 商业赞助商
+
+以下公司赞助的是上游 avante.nvim：
 
 <table>
   <tr>
@@ -1280,9 +1523,10 @@ Avante.nvim 可以通过其扩展模块与其他插件协同工作。下面是�
 
 ## 许可证
 
-avante.nvim 根据 Apache 2.0 许可证授权。有关更多详细信息，请参阅 [LICENSE](./LICENSE) 文件。
+avante.nvim 采用 Apache 2.0 许可证授权，本分支同样以该许可证分发，并完整保留上游的版权
+与声明文件。有关更多详细信息，请参阅 [LICENSE](./LICENSE) 文件。
 
-# Star 历史
+# Star 历史（上游 avante.nvim）
 
 <p align="center">
   <a target="_blank" href="https://star-history.dera.page/#yetone/avante.nvim&Date">

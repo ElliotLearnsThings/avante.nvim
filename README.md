@@ -4,43 +4,100 @@
 </div>
 
 <p align="center">
-  <a href="https://neovim.io/" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=Neovim&message=v0.10%2b&logo=neovim&labelColor=282828&logoColor=8faa80&color=414b32" alt="Neovim: v0.10+" /></a>
-  <a href="https://github.com/yetone/avante.nvim/actions/workflows/tests.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/yetone/avante.nvim/tests.yaml?style=flat-square&logo=lua&logoColor=c7c7c7&label=Lua+CI&labelColor=1E40AF&color=347D39&event=push" alt="Lua CI status" /></a>
-  <a href="https://github.com/yetone/avante.nvim/actions/workflows/rust.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/yetone/avante.nvim/rust.yaml?style=flat-square&logo=rust&logoColor=ffffff&label=Rust+CI&labelColor=BC826A&color=347D39&event=push" alt="Rust CI status" /></a>
-  <a href="https://github.com/yetone/avante.nvim/actions/workflows/pre-commit.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/yetone/avante.nvim/pre-commit.yaml?style=flat-square&logo=pre-commit&logoColor=ffffff&label=pre-commit&labelColor=FAAF3F&color=347D39&event=push" alt="pre-commit status" /></a>
-  <a href="https://discord.gg/QfnEFEdSjz" target="_blank"><img src="https://img.shields.io/discord/1302530866362323016?style=flat-square&logo=discord&label=Discord&logoColor=ffffff&labelColor=7376CF&color=268165" alt="Discord" /></a>
-  <a href="https://dotfyle.com/plugins/yetone/avante.nvim"><img src="https://dotfyle.com/plugins/yetone/avante.nvim/shield?style=flat-square" /></a>
+  <a href="https://neovim.io/" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=Neovim&message=v0.11%2b&logo=neovim&labelColor=282828&logoColor=8faa80&color=414b32" alt="Neovim: v0.11+" /></a>
+  <a href="https://claude.com/claude-code" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=engine&message=Claude%20Code%20CLI&logo=anthropic&labelColor=282828&logoColor=d97757&color=a8563a" alt="Engine: Claude Code CLI" /></a>
+  <a href="https://github.com/ElliotLearnsThings/avante.nvim/actions/workflows/tests.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/ElliotLearnsThings/avante.nvim/tests.yaml?style=flat-square&logo=lua&logoColor=c7c7c7&label=Lua+CI&labelColor=1E40AF&color=347D39&event=push" alt="Lua CI status" /></a>
+  <a href="https://github.com/ElliotLearnsThings/avante.nvim/actions/workflows/rust.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/ElliotLearnsThings/avante.nvim/rust.yaml?style=flat-square&logo=rust&logoColor=ffffff&label=Rust+CI&labelColor=BC826A&color=347D39&event=push" alt="Rust CI status" /></a>
+  <a href="https://github.com/ElliotLearnsThings/avante.nvim/actions/workflows/pre-commit.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/ElliotLearnsThings/avante.nvim/pre-commit.yaml?style=flat-square&logo=pre-commit&logoColor=ffffff&label=pre-commit&labelColor=FAAF3F&color=347D39&event=push" alt="pre-commit status" /></a>
+  <a href="https://github.com/yetone/avante.nvim" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=fork%20of&message=yetone/avante.nvim&logo=github&labelColor=282828&logoColor=ffffff&color=6f42c1" alt="Fork of yetone/avante.nvim" /></a>
 </p>
 
 **avante.nvim** is a Neovim plugin designed to emulate the behaviour of the [Cursor](https://www.cursor.com) AI IDE. It provides users with AI-driven code suggestions and the ability to apply these recommendations directly to their source files with minimal effort.
 
+**This repository is a fork.** It keeps all of that and changes the engine underneath: instead of talking to a dozen HTTP model APIs, it drives the **native [Claude Code CLI](https://claude.com/claude-code)** — and hands Avante's own tools back to it over an MCP bridge, so they still run inside Neovim.
+
 [查看中文版](README_zh.md)
 
-> [!NOTE]
+> [!IMPORTANT]
 >
-> 🥰 This project is undergoing rapid iterations, and many exciting features will be added successively. Stay tuned!
+> **`ElliotLearnsThings/avante.nvim` is a hard fork of [yetone/avante.nvim](https://github.com/yetone/avante.nvim), not a drop-in superset of it.**
+>
+> The whole provider layer has been replaced by a single provider, `claude_code`.
+> `openai`, `claude`, `copilot`, `gemini`, `ollama`, `azure`, `bedrock`, `vertex`,
+> `cohere`, `watsonx_code_assistant` and every config-only alias of those have been
+> **removed** — a `setup()` block written for upstream will not work here. There is
+> also no API key to configure: the Claude Code CLI owns authentication.
+>
+> Read [About this fork](#about-this-fork) before installing.
 
 <https://github.com/user-attachments/assets/510e6270-b6cf-459d-9a2f-15b397d1fe53>
 
 <https://github.com/user-attachments/assets/86140bfd-08b4-483d-a887-1b701d9e37dd>
 
-## Sponsorship ❤️
+## About this fork
 
-If you like this project, please consider supporting me on Patreon, as it helps me to continue maintaining and improving it:
+Upstream avante.nvim reaches models over HTTP and ships one provider per vendor.
+This fork removes all of them and replaces the layer with a single provider,
+`claude_code`, that drives the Claude Code CLI you already have installed:
 
-[Sponsor me](https://patreon.com/yetone)
+- **The CLI runs the turn.** Avante spawns `claude --print` through a small,
+  dependency-free Python adapter (`py/claude-code-adapter`) and streams the
+  result back into the sidebar. Your Claude Code subscription, its `CLAUDE.md`
+  discovery, skills, plugins, MCP servers and permission modes all come along.
+- **Avante's own tools still run inside Neovim.** They are exposed back to
+  Claude Code as an MCP server whose calls are proxied into the editor, so the
+  diff review, inline permission buttons, todos container, RAG search and web
+  search behave exactly as they always did. Which tool set the model may reach
+  for is [`tools_mode`](#tools-tools_mode).
+- **No API keys.** `claude auth` is the only credential involved, and Avante
+  never prompts for one.
+
+|                 | upstream `yetone/avante.nvim`                        | this fork                                                              |
+| --------------- | ---------------------------------------------------- | ---------------------------------------------------------------------- |
+| Providers       | ~12 HTTP providers plus aliases                      | one: `claude_code`                                                     |
+| Credentials     | a per-provider API key                               | `claude auth`, no key anywhere                                          |
+| Transport       | `curl` to an HTTP endpoint                           | subprocess → Python adapter → `claude --print`                          |
+| Tools           | Avante's tools, run in Neovim                        | Avante's tools in Neovim, Claude Code's, or both — see `tools_mode`     |
+| Slash commands  | Avante's own                                         | Avante's, plus Claude Code's commands, skills and plugin commands       |
+| Sessions        | the transcript is resent every turn                  | the CLI session is resumed between turns, keeping prompt caching warm    |
+| ACP agents      | a `claude-code` entry wrapping a third-party npm shim | `acp_providers = {}`; configure your own agent if you want one          |
+
+Everything else is upstream's and is documented below as it always was: the
+sidebar, the keybindings, `avante.md` project instructions, custom tools, custom
+prompts, MCP support and the RAG service.
+
+See [Architecture](#architecture) for how the pieces fit together, and
+[DECISIONS.md](./DECISIONS.md) for the reasoning behind every change — including
+the designs that were considered and rejected.
 
 ## Features
 
+- **Native Claude Code, driven from Neovim**: the real `claude` binary runs each
+  turn, so anything the CLI can do in a terminal it can do in the sidebar.
+- **Avante's tools, bridged back into the editor**: file edits still land in
+  Avante's diff review with inline accept/reject, and confirmations, todos, RAG
+  search and web search all keep working.
 - **AI-Powered Code Assistance**: Interact with AI to ask questions about your current code file and receive intelligent suggestions for improvement or modification.
 - **One-Click Application**: Quickly apply the AI's suggested changes to your source code with a single command, streamlining the editing process and saving time.
 - **Project-Specific Instruction Files**: Customize AI behavior by adding a markdown file (`avante.md` by default) in the project root. This file is automatically referenced during workspace changes. You can also configure a custom file name for tailored project instructions.
+- **Claude Code's own extension surface**: its slash commands, skills and
+  plugins are offered in the input buffer alongside Avante's.
+- **No API key management**: authentication is the CLI's, and sessions are
+  resumed between turns instead of replaying the whole transcript.
+
+## Sponsorship ❤️
+
+This fork exists because of [yetone](https://github.com/yetone)'s work. If
+avante.nvim is useful to you, please consider supporting the upstream author,
+who maintains the plugin everything here is built from:
+
+[Sponsor yetone](https://patreon.com/yetone)
 
 ## Avante Zen Mode
 
 It is possible to launch avante such that it looks like a typical Vibe Coding Agent CLI but while being completely Neovim underneath. So you can use your muscle-memory Vim operations and those rich and mature Neovim plugins on it. At the same time, because avante drives the [native Claude Code CLI](#provider), it has every capability Claude Code itself has! Why not enjoy both?
 
-Now all you need to do is install [./contrib/avante] in your PATH (or create the equivalent alias); then every time you simply type avante just like using claude code and enter Avante’s Zen Mode!
+Now all you need to do is install [`contrib/avante`](./contrib/avante) in your PATH (or create the equivalent alias); then every time you simply type avante just like using claude code and enter Avante’s Zen Mode!
 
 The effect is as follows:
 
@@ -139,11 +196,35 @@ myapp is a modern e-commerce platform targeting small businesses. we prioritize 
 
 For building binary if you wish to build from source, then `cargo` is required. Otherwise `curl` and `tar` will be used to get prebuilt binary from GitHub.
 
-> [!IMPORTANT]
+### Prerequisites
+
+Do these three things first — in this order. None of them involves an API key.
+
+1. **Install the Claude Code CLI** from <https://claude.com/claude-code>, and
+   make sure `claude` is on your `$PATH`: `claude --version` should answer. If
+   you keep the binary somewhere unusual, point
+   `providers.claude_code.cli_path` at it instead.
+2. **Authenticate it once**, with `claude auth login` in a terminal — or with
+   `:AvanteClaudeCodeAuth` once the plugin is installed, which opens the same
+   interactive flow in a terminal split. `claude auth status` should report that
+   you are signed in. There is no `ANTHROPIC_API_KEY` to export and nothing to
+   put in your shell profile; whatever `claude` works with in your terminal is
+   what Avante uses.
+3. **Have Python 3.9 or newer on your `$PATH`.** The bundled adapter
+   (`py/claude-code-adapter`) is written against the standard library only:
+   there is nothing to `pip install`, no virtualenv to create and no `uv sync`
+   to run. Set `providers.claude_code.python_path` if your interpreter is not
+   discoverable as `python3` or `python`.
+
+Then install the plugin **from this fork** — `ElliotLearnsThings/avante.nvim`,
+not `yetone/avante.nvim` — with the plugin manager of your choice. Neovim 0.11.0
+or later is required.
+
+> [!TIP]
 >
-> avante drives the native [Claude Code CLI](#provider). Install it from
-> <https://claude.com/claude-code>, sign in once with `claude auth`, and make
-> sure Python 3.9 or newer is on your `$PATH`. There is no API key to configure.
+> After installing, run `:AvanteClaudeCodeStatus` (or `:checkhealth avante`) to
+> confirm that the CLI, the Python interpreter and your sign-in are all where
+> Avante expects them.
 
 <details open>
 
@@ -151,7 +232,7 @@ For building binary if you wish to build from source, then `cargo` is required. 
 
 ```lua
 {
-  "yetone/avante.nvim",
+  "ElliotLearnsThings/avante.nvim",
   -- if you want to build from source then do `make BUILD_FROM_SOURCE=true`
   -- ⚠️ must add this setting! ! !
   build = vim.fn.has("win32") ~= 0
@@ -170,6 +251,7 @@ For building binary if you wish to build from source, then `cargo` is required. 
     providers = {
       claude_code = {
         model = "sonnet",
+        tools_mode = "avante", -- Avante's own tools, run inside Neovim
         permission_mode = "acceptEdits",
       },
     },
@@ -237,7 +319,7 @@ vim.api.nvim_create_autocmd(
 
 vim.pack.add({
   {
-    src='https://github.com/yetone/avante.nvim',
+    src='https://github.com/ElliotLearnsThings/avante.nvim',
     version='main'  -- default
   },
 
@@ -291,7 +373,7 @@ Plug 'HakonHarnes/img-clip.nvim'
 Plug 'folke/snacks.nvim' " for modern input UI
 
 " Yay, pass source=true if you want to build from source
-Plug 'yetone/avante.nvim', { 'branch': 'main', 'do': 'make' }
+Plug 'ElliotLearnsThings/avante.nvim', { 'branch': 'main', 'do': 'make' }
 
 call plug#end()
 
@@ -311,7 +393,7 @@ EOF
 local add, later, now = MiniDeps.add, MiniDeps.later, MiniDeps.now
 
 add({
-  source = 'yetone/avante.nvim',
+  source = 'ElliotLearnsThings/avante.nvim',
   monitor = 'main',
   depends = {
     'nvim-lua/plenary.nvim',
@@ -464,8 +546,9 @@ If both are used, options passed to `setup()` override values from `vim.g.avante
   -- the old `claude-code` ACP entry, so no agent is configured out of the box.
   acp_providers = {},
   providers = {
-    --- The native Claude Code CLI, driven through the Python adapter in
-    --- `py/claude-code-adapter`. See the "Provider" section below.
+    --- The only built-in provider: the native Claude Code CLI, driven through
+    --- the Python adapter in `py/claude-code-adapter`. See the "Provider"
+    --- section below.
     claude_code = {
       display_name = "Claude Code",
       model = "sonnet", -- A model alias ("opus", "sonnet", "haiku") or a full model name
@@ -482,6 +565,13 @@ If both are used, options passed to `setup()` override values from `vim.g.avante
       add_dirs = {}, -- Extra directories Claude Code is allowed to touch
       mcp_config = {}, -- MCP server config files or JSON strings
       strict_mcp_config = false, -- Ignore every MCP server that is not listed in `mcp_config`
+      -- Claude Code plugins loaded for this session only, layered on top of
+      -- whatever `claude plugin install` has already put in place
+      plugin_dirs = {},
+      plugin_urls = {},
+      -- Claude Code's own slash commands are offered in the input buffer
+      -- alongside Avante's. Set true to keep only Avante's
+      disable_slash_commands = false,
       settings = nil, -- Settings file path or JSON string
       setting_sources = nil, -- Which setting sources to load
       agents = nil, -- Custom agent definitions, as a JSON string
@@ -496,8 +586,18 @@ If both are used, options passed to `setup()` override values from `vim.g.avante
       env = {}, -- Extra environment variables for the CLI
       timeout = 0, -- Abort the turn after this many milliseconds. 0 disables the timeout
       context_window = 200000,
-      disable_tools = true, -- Claude Code brings its own tools, Avante's would duplicate them
+      -- Which tools the model may reach for:
+      --   "avante" -- Avante's own, executed inside Neovim over the MCP bridge,
+      --              so the diff review, confirmations, todos, RAG and web
+      --              search all behave as they always have
+      --   "native" -- Claude Code's built-ins, which edit files directly
+      --   "both"   -- both sets, at the cost of overlapping capabilities
+      tools_mode = "avante",
+      -- Kept in step with `tools_mode`: Avante only builds its tool list when
+      -- something can actually call it. Set true alongside tools_mode = "native"
+      disable_tools = false,
     },
+  },
   },
   ---Specify the special dual_boost mode
   ---1. enabled: Whether to enable dual_boost mode. Default to false.
@@ -655,26 +755,34 @@ If both are used, options passed to `setup()` override values from `vim.g.avante
 Avante has exactly one built-in provider: `claude_code`. Rather than talking to
 an HTTP API, it drives the **native Claude Code CLI** through a small Python
 adapter that ships with the plugin (`py/claude-code-adapter`). The adapter runs
-`claude --print --output-format stream-json`, merges the CLI's agentic loop into
-a single assistant message and re-emits it as Anthropic Messages API events, so
-the sidebar, chat history and token accounting behave exactly as they always
-did.
+`claude --print --input-format stream-json --output-format stream-json`, merges
+the CLI's agentic loop into a single assistant message and re-emits it as
+Anthropic Messages API events, so the sidebar, chat history and token accounting
+behave exactly as they always did.
+
+Avante's own tools are not lost in the process: they are offered back to Claude
+Code as an MCP server, and every call the model makes is proxied into Neovim and
+executed there by Avante's runner. See [`tools_mode`](#tools-tools_mode) below,
+and [Architecture](#architecture) for the shape of the whole path.
 
 ### Setup
 
-1. **Install the Claude Code CLI** from <https://claude.com/claude-code>, then
-   sign in once with `claude auth`. Authentication belongs entirely to the CLI:
-   avante never reads or prompts for an API key, and there is no
-   `ANTHROPIC_API_KEY` to export. Whatever `claude` works with in your terminal
-   is what avante uses. If the binary is not on your `$PATH`, point `cli_path`
-   at it.
+The prerequisites are covered in full under [Installation](#prerequisites); in
+short:
+
+1. **Install the Claude Code CLI** from <https://claude.com/claude-code> and
+   sign in once with `claude auth login` (or `:AvanteClaudeCodeAuth`).
+   Authentication belongs entirely to the CLI: Avante never reads or prompts for
+   an API key, and there is no `ANTHROPIC_API_KEY` to export. If the binary is
+   not on your `$PATH`, point `cli_path` at it.
 2. **Make sure Python 3.9 or newer is on your `$PATH`.** The bundled adapter is
    written against the standard library only — there is nothing to
    `pip install` and no virtualenv to create. Set `python_path` if your
    interpreter is not discoverable as `python3` or `python`.
 
 That is the whole setup. `require("avante").setup({})` with no options at all
-already talks to Claude Code:
+already talks to Claude Code; the defaults below are spelled out only so you can
+see what you are getting:
 
 ```lua
 require("avante").setup({
@@ -682,84 +790,131 @@ require("avante").setup({
   providers = {
     claude_code = {
       model = "sonnet",
+      tools_mode = "avante",
       permission_mode = "acceptEdits",
     },
   },
 })
 ```
 
-### Claude Code runs its own tools
+### Tools: `tools_mode`
 
-This is the one behavioural difference worth internalising. Claude Code owns a
-complete agentic loop: it reads, greps, runs commands and **writes files on disk
-directly**, and only returns to avante once the whole turn is finished. Two
-consequences follow:
+Two complete tool sets meet in this plugin — Avante's, which run inside Neovim,
+and Claude Code's, which run in the CLI process. `tools_mode` decides which of
+them the model may call.
 
-- Avante's own tool runner is disabled for this provider (`disable_tools = true`
-  by default), so a tool is never executed twice. Claude Code's tool calls are
-  rendered inline in the sidebar as activity, not replayed as avante tools.
-- Avante's diff review does not sit in front of Claude Code's edits, because the
-  edits have already happened by the time the response arrives. Use `git` — or
-  `permission_mode` — as your safety net.
+| Value      | Which tools the model sees                    | Where they run                | What you get                                                                                 |
+| ---------- | --------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| `"avante"` | Avante's tools only (**the default**)         | Inside Neovim, over MCP       | The diff review, inline permission buttons, todos container, RAG search and web search        |
+| `"native"` | Claude Code's built-ins only                  | In the CLI process            | Claude Code's own Read/Edit/Write/Bash/Grep, editing files on disk directly                    |
+| `"both"`   | Both sets at once                             | Both                          | Everything, at the cost of two overlapping ways to do the same job                             |
+
+**`"avante"` — the default.** Avante's tool schemas are handed to Claude Code as
+an MCP server, and each `tools/call` is bridged back into Neovim, where the real
+Lua tool runs. Practically, this is the mode that makes the plugin feel like
+Avante: an edit arrives as a reviewable diff in the sidebar with accept/reject
+mappings, a tool that needs confirmation draws its inline buttons, the todos
+container fills up, and `@codebase`/RAG search and web search work as they
+always have. Claude Code's own built-ins are switched off for the turn — unless
+you have set `tools` yourself, the adapter passes `--tools ""` — so a file is
+never written behind your back and nothing is executed twice.
+
+**`"native"`.** Claude Code uses its own tools and **edits files on disk
+directly**, returning to Avante only when the whole turn is finished. Avante's
+diff review does not sit in front of those edits — by the time the response
+arrives, the change has already happened, so `git` and `permission_mode` are
+your safety net. In exchange you get exactly the behaviour of the CLI in a
+terminal, which is faster on large mechanical refactors and is what Claude Code
+itself is tuned for. Set `disable_tools = true` alongside it so Avante does not
+spend prompt tokens describing tools that can never be called.
+
+**`"both"`.** Both sets are offered. Useful when you want Avante's reviewable
+edits but also, say, Claude Code's own `Bash`. The model then has two ways to
+read a file and two ways to write one, and which it picks is up to it — so
+expect less predictable behaviour than either single mode.
+
+```lua
+providers = {
+  claude_code = {
+    tools_mode = "avante", -- "avante" | "native" | "both"
+    disable_tools = false, -- set true only with tools_mode = "native"
+  },
+}
+```
 
 ### Permission modes
 
-`permission_mode` is therefore the control that matters. It is passed straight
-through to `claude --permission-mode`, so the CLI's own documentation is
-authoritative, but in short:
+`permission_mode` is passed straight through to `claude --permission-mode`, so
+the CLI's own documentation is authoritative, but in short:
 
-| Value               | Behaviour                                                                              |
-| ------------------- | -------------------------------------------------------------------------------------- |
-| `acceptEdits`       | **The default.** File edits are applied as they are made, without asking.              |
-| `plan`              | Planning only: Claude Code investigates and proposes changes instead of making them.   |
+| Value               | Behaviour                                                                                                |
+| ------------------- | -------------------------------------------------------------------------------------------------------- |
+| `acceptEdits`       | **The default.** File edits are applied as they are made, without asking.                                |
+| `plan`              | Planning only: Claude Code investigates and proposes changes instead of making them.                     |
 | `bypassPermissions` | Every permission check is skipped. Fast, and the most dangerous — use it in throwaway or sandboxed trees. |
-| `manual`            | Nothing is pre-approved; each action has to be permitted explicitly.                   |
-| `dontAsk`           | Claude Code proceeds without raising permission prompts.                               |
-| `auto`              | Claude Code decides how much approval it needs as the turn goes on.                    |
+| `manual`            | Nothing is pre-approved; each action has to be permitted explicitly.                                     |
+| `dontAsk`           | Claude Code proceeds without raising permission prompts.                                                 |
+| `auto`              | Claude Code decides how much approval it needs as the turn goes on.                                      |
+
+It governs **Claude Code's own tools**, so it matters most with
+`tools_mode = "native"` or `"both"`. Under the default `tools_mode = "avante"`
+those tools are switched off entirely and it is Avante's confirmation flow —
+inline permission buttons, the diff review, `behaviour.auto_approve_tool_permissions`
+— that decides what happens.
 
 Avante drives the CLI non-interactively, so a mode that would normally stop and
-ask cannot be answered from the sidebar — Claude Code declines the action
-instead of waiting for you. That is why `acceptEdits` is the default. Start with
-`plan` if you want to see what a request would do before anything is written.
+ask cannot be answered from the sidebar: Claude Code declines the action instead
+of waiting for you. That is why `acceptEdits` is the default. Start with `plan`
+if you want to see what a request would do before anything is written.
 
 ### Configuration keys
 
-All of the following live under `providers.claude_code`:
+All of the following live under `providers.claude_code`. The authoritative list
+is the defaults block in [`lua/avante/config.lua`](./lua/avante/config.lua).
 
-| Key                  | Type                | Description                                                                                             |
-| -------------------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
-| `model`              | `string`            | Model alias (`"opus"`, `"sonnet"`, `"haiku"`) or a full model name. Default `"sonnet"`.                  |
-| `cli_path`           | `string`            | The `claude` executable. A bare name is looked up on `$PATH`; an absolute path is taken as is.           |
-| `python_path`        | `string?`           | Interpreter used to run the adapter. Auto-detected from `python3`/`python` when unset.                   |
-| `permission_mode`    | `string`            | How freely Claude Code may act. See the table above. Default `"acceptEdits"`.                            |
-| `tools`              | `string[]?`         | The built-in tools Claude Code may use. `nil` keeps its default set, `{}` disables all of them.          |
-| `allowed_tools`      | `string[]?`         | Tools to allow explicitly, e.g. `{ "Read", "Grep", "Glob" }` for a read-only session.                    |
-| `disallowed_tools`   | `string[]?`         | Tools to forbid, e.g. `{ "Bash" }`.                                                                     |
-| `add_dirs`           | `string[]`          | Extra directories Claude Code may reach outside `cwd`.                                                   |
-| `mcp_config`         | `string[]`          | MCP server configuration files or JSON strings, one `--mcp-config` each.                                 |
-| `strict_mcp_config`  | `boolean`           | Ignore every MCP server that is not listed in `mcp_config`. Default `false`.                             |
-| `plugin_dirs`        | `string[]`          | Claude Code plugin directories or `.zip` files, loaded for this session only.                            |
-| `plugin_urls`        | `string[]`          | URLs of Claude Code plugin `.zip` files, loaded for this session only.                                   |
-| `disable_slash_commands` | `boolean`       | Offer only avante's slash commands, not Claude Code's. Default `false`.                                  |
-| `settings`           | `string?`           | A Claude Code settings file path or a JSON string.                                                       |
-| `setting_sources`    | `string?`           | Which setting sources the CLI should load.                                                               |
-| `agents`             | `string?`           | Custom agent definitions, as a JSON string.                                                              |
-| `effort`             | `string?`           | Reasoning effort: `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"`.                                   |
-| `fallback_model`     | `string?`           | Model to fall back to when the primary one is overloaded.                                                |
-| `max_budget_usd`     | `number?`           | Spend ceiling for a single turn, in US dollars.                                                          |
-| `cwd`                | `string?`           | Directory Claude Code runs in — its tools are scoped to it. Defaults to the project root.                |
-| `stateful`           | `boolean`           | Resume the Claude Code session between turns instead of replaying the transcript. Default `true`.        |
-| `emit_tool_activity` | `boolean`           | Show Claude Code's own tool calls and results in the sidebar. Default `true`.                            |
-| `extra_args`         | `string[]`          | Arguments appended verbatim to the CLI invocation — the escape hatch for anything not modelled here.     |
-| `env`                | `table<string,string>` | Extra environment variables for the CLI process.                                                      |
-| `timeout`            | `number`            | Abort the turn after this many milliseconds. `0` (the default) disables the timeout.                     |
+| Key                      | Type                   | Description                                                                                                  |
+| ------------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `model`                  | `string`               | Model alias (`"opus"`, `"sonnet"`, `"haiku"`) or a full model name. Default `"sonnet"`.                       |
+| `model_names`            | `string[]`             | The list offered by `:AvanteModels`. Default `{ "opus", "sonnet", "haiku" }`.                                 |
+| `display_name`           | `string`               | Name shown in the sidebar and provider selector. Default `"Claude Code"`.                                     |
+| `cli_path`               | `string`               | The `claude` executable. A bare name is looked up on `$PATH`; a path is taken as is. Default `"claude"`.      |
+| `python_path`            | `string?`              | Interpreter used to run the adapter. Auto-detected from `python3`/`python` when unset.                        |
+| `tools_mode`             | `string`               | Whose tools the model may call: `"avante"` (default), `"native"` or `"both"`. See above.                      |
+| `disable_tools`          | `boolean`              | Stop Avante building its tool list at all. Default `false`; set `true` with `tools_mode = "native"`.          |
+| `permission_mode`        | `string`               | How freely Claude Code's own tools may act. See the table above. Default `"acceptEdits"`.                     |
+| `tools`                  | `string[]?`            | The built-in tools Claude Code may use. `nil` keeps its default set, `{}` disables all of them.               |
+| `allowed_tools`          | `string[]?`            | Built-in tools to allow explicitly, e.g. `{ "Read", "Grep", "Glob" }` for a read-only session.                |
+| `disallowed_tools`       | `string[]?`            | Built-in tools to forbid, e.g. `{ "Bash" }`.                                                                 |
+| `add_dirs`               | `string[]`             | Extra directories Claude Code may reach outside `cwd`. Default `{}`.                                          |
+| `mcp_config`             | `string[]`             | MCP server configuration files or JSON strings, one `--mcp-config` each. Default `{}`.                        |
+| `strict_mcp_config`      | `boolean`              | Ignore every MCP server that is not listed in `mcp_config`. Default `false`.                                  |
+| `plugin_dirs`            | `string[]`             | Claude Code plugin directories or `.zip` files, loaded for this session only. Default `{}`.                    |
+| `plugin_urls`            | `string[]`             | URLs of Claude Code plugin `.zip` files, loaded for this session only. Default `{}`.                          |
+| `disable_slash_commands` | `boolean`              | Offer only Avante's slash commands, not Claude Code's. Default `false`.                                       |
+| `settings`               | `string?`              | A Claude Code settings file path or a JSON string.                                                            |
+| `setting_sources`        | `string?`              | Which setting sources the CLI should load, e.g. `"user,project,local"`.                                        |
+| `agents`                 | `string?`              | Custom agent definitions, as a JSON string.                                                                   |
+| `effort`                 | `string?`              | Reasoning effort: `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"`.                                        |
+| `fallback_model`         | `string?`              | Model to fall back to when the primary one is overloaded.                                                     |
+| `max_budget_usd`         | `number?`              | Spend ceiling for a single turn, in US dollars.                                                               |
+| `cwd`                    | `string?`              | Directory Claude Code runs in — its tools are scoped to it. Defaults to the project root.                     |
+| `stateful`               | `boolean`              | Resume the Claude Code session between turns instead of replaying the transcript. Default `true`.             |
+| `emit_tool_activity`     | `boolean`              | Show Claude Code's own tool calls and results in the sidebar. Default `true`.                                  |
+| `append_system_prompt`   | `string?`              | Text appended to the system prompt, passed through as `--append-system-prompt`.                               |
+| `extra_args`             | `string[]`             | Arguments appended verbatim to the CLI invocation — the escape hatch for anything not modelled here.          |
+| `env`                    | `table<string,string>` | Extra environment variables for the CLI process. Default `{}`.                                                 |
+| `timeout`                | `number`               | Abort the turn after this many **milliseconds**. `0` (the default) disables the timeout.                       |
+| `context_window`         | `integer`              | Context size used for Avante's token accounting. Default `200000`.                                            |
 
-A read-only configuration, for example, looks like this:
+A read-only configuration that leans on Claude Code's own tools, for example,
+looks like this:
 
 ```lua
 providers = {
   claude_code = {
     model = "opus",
+    tools_mode = "native",
+    disable_tools = true,
     permission_mode = "plan",
     allowed_tools = { "Read", "Grep", "Glob" },
   },
@@ -769,23 +924,23 @@ providers = {
 ### Native slash commands
 
 Claude Code's own slash commands — `/context`, `/compact`, your skills, anything
-a plugin contributes — are offered in the avante input buffer alongside
-avante's. Typing one passes the text through untouched and the CLI resolves it,
+a plugin contributes — are offered in the Avante input buffer alongside
+Avante's. Typing one passes the text through untouched and the CLI resolves it,
 so they behave exactly as they do in a terminal session.
 
-Where a name exists on both sides, avante's wins: its `/compact` acts on the
-avante-side conversation, which is what typing it in the sidebar means.
+Where a name exists on both sides, Avante's wins: its `/compact` acts on the
+Avante-side conversation, which is what typing it in the sidebar means.
 
-The CLI announces its command list at the start of every turn, so avante learns
+The CLI announces its command list at the start of every turn, so Avante learns
 it from your first message and caches it to
 `stdpath("cache")/avante/claude_code_capabilities.json`. From then on the
 commands are available immediately at startup. Set `disable_slash_commands = true`
-to offer only avante's.
+to offer only Avante's.
 
 ### Plugins
 
 Plugins you have installed with `claude plugin install` are picked up
-automatically. To load one for avante sessions only — a work-in-progress plugin,
+automatically. To load one for Avante sessions only — a work-in-progress plugin,
 say — point `plugin_dirs` or `plugin_urls` at it:
 
 ```lua
@@ -801,7 +956,7 @@ Run `:AvanteClaudeCodeStatus` to see which plugins are active.
 
 ### Authentication
 
-There is no API key to set. Claude Code authenticates itself, and avante uses
+There is no API key to set. Claude Code authenticates itself, and Avante uses
 whatever session the CLI already has:
 
 ```sh
@@ -809,10 +964,75 @@ claude auth login     # or run :AvanteClaudeCodeAuth from Neovim
 claude auth status
 ```
 
-`:AvanteClaudeCodeAuth` opens the interactive sign-in flow in a terminal split.
-`:AvanteClaudeCodeStatus` reports the CLI version, how you are signed in,
-installed plugins and how many native commands are available; `:checkhealth
-avante` covers the same ground.
+`:AvanteClaudeCodeAuth` opens the interactive sign-in flow in a terminal split,
+because signing in needs a real TTY. `:AvanteClaudeCodeStatus` reports the CLI
+version, how you are signed in, installed plugins and how many native commands
+are available; `:checkhealth avante` covers the same ground. Both are backed by
+the adapter's `--probe` mode, which only calls CLI subcommands that resolve
+locally — no turn is started and no tokens are spent.
+
+## Architecture
+
+Neovim never speaks HTTP for a chat turn. `llm.lua` forks on
+`provider.transport == "subprocess"`, and the provider builds a process
+invocation instead of curl arguments: one JSON object describing the request is
+written to the adapter's stdin, and the adapter writes Anthropic
+server-sent events back on stdout. Everything downstream of `parse_response` —
+the agent loop, history, sidebar rendering, token accounting — is untouched,
+because the bytes arriving are the same bytes `api.anthropic.com` would have
+sent.
+
+The adapter is a stdlib-only Python program. It turns the request into a
+`claude` command line, reads the CLI's `stream-json` NDJSON, and merges what is
+really a *complete agentic loop* — several assistant messages, each with its own
+`message_start`/`message_stop` — into the single streamed message Avante
+expects: content-block indices renumbered, usage summed, one terminal
+`message_delta`/`message_stop` synthesised from the CLI's final `result` record.
+
+Tools travel in the opposite direction. When `tools_mode` is `"avante"` or
+`"both"`, Avante's tool schemas ride along with the request; the adapter gives
+Claude Code an MCP server (`mcp_server.py`) via `--mcp-config`. That server holds
+no tool logic — it proxies `tools/list` and `tools/call` over a Unix socket to
+the adapter, which emits an `avante_tool_call` event and blocks until Neovim
+answers on stdin. The real Lua tool runs in the editor, which is what keeps the
+diff review, permission prompts and history rendering working.
+
+```
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Neovim  —  sidebar · history · diff review · todos                │
+  │             avante.llm_tools  (the real Lua tools)                 │
+  └──────────────┬──────────────────────────────────────▲──────────────┘
+                 │ stdin: one JSON request,             │  stdout: Anthropic SSE
+                 │ then a line per tool result          │  (+ avante_session,
+                 │                                      │   avante_capabilities,
+                 │                                      │   avante_tool_call)
+  ┌──────────────▼──────────────────────────────────────┴──────────────┐
+  │  py/claude-code-adapter  —  stdlib-only Python                     │
+  │    argv builder · StreamTranslator · bridge.py (Unix socket)       │
+  └──────────────┬──────────────────────────────────────▲──────────────┘
+                 │ claude --print                       │  stream-json NDJSON
+                 │ --input-format stream-json           │
+                 │ --output-format stream-json          │
+  ┌──────────────▼──────────────────────────────────────┴──────────────┐
+  │  claude  —  the native Claude Code CLI                             │
+  └──────────────┬──────────────────────────────────────▲──────────────┘
+                 │ stdio (JSON-RPC), spawned            │  the tool's result
+                 │ by the CLI from --mcp-config         │
+  ┌──────────────▼──────────────────────────────────────┴──────────────┐
+  │  mcp_server.py  —  no tool logic, just a socket to the adapter     │
+  └────────────────────────────────────────────────────────────────────┘
+
+  The tool bridge, spelled out — the call goes down, the result comes back up:
+
+    claude --stdio--> mcp_server --socket--> adapter --stdout--> Neovim
+                                                     <--stdin---
+```
+
+The reasoning behind each of these choices — why a Python adapter rather than
+raw Lua, why Anthropic SSE rather than a bespoke protocol, why MCP rather than
+ACP, and what was tried and rejected along the way — is recorded in
+[DECISIONS.md](./DECISIONS.md). The adapter's own protocol is documented in
+[`py/claude-code-adapter/README.md`](./py/claude-code-adapter/README.md).
 
 ## Blink.cmp users
 
@@ -1036,10 +1256,12 @@ Given its early stage, `avante.nvim` currently supports the following basic func
 > [!IMPORTANT]
 >
 > There is no API key to configure. Avante drives the Claude Code CLI, which
-> authenticates itself — run `claude auth` once in your terminal and you are
-> done. See [Provider](#provider) for the full setup and for the
-> `permission_mode` setting that governs how freely Claude Code edits your
-> files.
+> authenticates itself — run `claude auth login` once in your terminal, or
+> `:AvanteClaudeCodeAuth` from Neovim, and you are done. See
+> [Provider](#provider) for the full setup, for
+> [`tools_mode`](#tools-tools_mode) — which decides whether an edit arrives as a
+> reviewable diff in the sidebar or lands straight on disk — and for
+> `permission_mode`.
 
 1. Open a code file in Neovim.
 2. Use the `:AvanteAsk` command to query the AI about the code.
@@ -1312,15 +1534,31 @@ Environment variables required for providers:
 
 ## Disable Tools
 
-Avante's own tool runner is **already disabled for `claude_code`**: the CLI
-brings its own Read, Edit, Bash, Grep and friends, and running both sets would
-execute every tool twice. That is what `disable_tools = true` means in the
-default provider configuration. To restrict what Claude Code itself may do, use
-its `tools`, `allowed_tools` and `disallowed_tools` keys — see
+Which tool set exists at all is decided by [`tools_mode`](#tools-tools_mode).
+This section is about the two remaining switches: turning Avante's tool
+machinery off entirely, and banning individual tools.
+
+`disable_tools` is provider-scoped and travels with `tools_mode`. It tells
+Avante whether to build its tool list for a request at all, so with the default
+`tools_mode = "avante"` it must stay `false` — otherwise there would be nothing
+to bridge to Claude Code. Set it to `true` when you switch to
+`tools_mode = "native"`, so Avante does not spend prompt tokens describing tools
+that will never be called:
+
+```lua
+providers = {
+  claude_code = {
+    tools_mode = "native", -- Claude Code's own tools do the work
+    disable_tools = true,  -- so Avante should not offer its own
+  },
+}
+```
+
+To restrict what Claude Code's built-in tools may do, use its `tools`,
+`allowed_tools` and `disallowed_tools` keys instead — see
 [Provider](#provider).
 
-`disable_tools` is provider-scoped, so a custom provider that cannot handle
-tools can opt out the same way:
+The same key opts a custom provider out of tools entirely:
 
 ```lua
 providers = {
@@ -1331,8 +1569,9 @@ providers = {
 }
 ```
 
-If you want to ban individual avante tools for the providers that do use them,
-list them in `disabled_tools`:
+If you want to ban individual Avante tools while keeping the rest — for any
+provider that uses them, `claude_code` included — list them in the top-level
+`disabled_tools` (note the `d`, this is a different key):
 
 ```lua
 {
@@ -1562,11 +1801,38 @@ You can also disable specific tools while keeping agentic mode enabled by config
 
 ## Contributing
 
-Contributions to avante.nvim are welcome! If you're interested in helping out, please feel free to submit pull requests or open issues.
+Contributions are welcome. Issues and pull requests about the Claude Code
+provider, the Python adapter or the MCP tool bridge belong in
+[this fork](https://github.com/ElliotLearnsThings/avante.nvim); anything else is
+almost certainly upstream's, and is best sent to
+[yetone/avante.nvim](https://github.com/yetone/avante.nvim) so that everyone
+benefits.
 
-See [wiki](https://github.com/yetone/avante.nvim/wiki) for more recipes and tricks.
+If you are changing how the Claude Code integration works, read
+[DECISIONS.md](./DECISIONS.md) first — it records what was already tried.
+
+See the upstream [wiki](https://github.com/yetone/avante.nvim/wiki) for more recipes and tricks.
 
 ## Acknowledgments
+
+### Upstream: yetone/avante.nvim
+
+This project is a fork of **[yetone/avante.nvim](https://github.com/yetone/avante.nvim)**,
+and it is derivative work in the plainest sense of the term. The sidebar, the
+diff review, the tool framework, the history and session machinery, the
+templating system, the Rust crates, the Neovim integration — very nearly every
+line below the provider layer — were written by
+[yetone](https://github.com/yetone) and avante.nvim's
+[contributors](https://github.com/yetone/avante.nvim/graphs/contributors). What
+this fork changes is how the model is reached; everything that makes the plugin
+worth using was already there when it was forked.
+
+If avante.nvim is useful to you, please star, sponsor and contribute to
+[upstream](https://github.com/yetone/avante.nvim) — that is where the plugin is
+maintained. Anything that is not specific to the Claude Code provider is almost
+certainly an upstream matter and is best raised there.
+
+### Projects avante.nvim itself drew on
 
 We would like to express our heartfelt gratitude to the contributors of the following open-source projects, whose code has provided invaluable inspiration and reference for the development of avante.nvim:
 
@@ -1581,7 +1847,14 @@ We would like to express our heartfelt gratitude to the contributors of the foll
 
 The high quality and ingenuity of these projects' source code have been immensely beneficial throughout our development process. We extend our sincere thanks and respect to the authors and contributors of these projects. It is the selfless dedication of the open-source community that drives projects like avante.nvim forward.
 
+(The table is upstream's and is kept intact. Some of the files it points at —
+`lua/avante/providers/copilot.lua`, for one — went away with the provider layer
+this fork replaced; the links are to upstream, where they still stand, and the
+attribution stands with them.)
+
 ## Business Sponsors
+
+These companies sponsor upstream avante.nvim:
 
 <table>
   <tr>
@@ -1606,9 +1879,11 @@ The high quality and ingenuity of these projects' source code have been immensel
 
 ## License
 
-avante.nvim is licensed under the Apache 2.0 License. For more details, please refer to the [LICENSE](./LICENSE) file.
+avante.nvim is licensed under the Apache 2.0 License, and this fork is
+distributed under that same licence, keeping upstream's copyright and notice
+files intact. For more details, please refer to the [LICENSE](./LICENSE) file.
 
-# Star History
+# Star History (upstream avante.nvim)
 
 <p align="center">
   <a target="_blank" href="https://star-history.dera.page/#yetone/avante.nvim&Date">
