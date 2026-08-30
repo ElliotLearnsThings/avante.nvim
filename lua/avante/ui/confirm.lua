@@ -16,6 +16,7 @@ local Config = require("avante.config")
 ---@field _prev_winid number | nil
 ---@field _ns_id number | nil
 ---@field _skip_reject_prompt boolean | nil
+---@field _permission_options avante.acp.PermissionOption[] | nil
 local M = {}
 M.__index = M
 
@@ -36,6 +37,7 @@ function M:new(message, callback, opts)
   this._container_winid = opts.container_winid or vim.api.nvim_get_current_win()
   this._focus = opts.focus
   this._skip_reject_prompt = opts.skip_reject_prompt
+  this._permission_options = opts.permission_options
   this._ns_id = vim.api.nvim_create_namespace("avante_confirm")
   return this
 end
@@ -70,15 +72,28 @@ function M:open()
     { "  " },
   })
 
+  -- When the ACP agent supplied its own option labels (e.g. ExitPlanMode's
+  -- "Yes, and auto-accept edits" / "No, keep planning"), show those instead of
+  -- the generic Yes / All yes / No so the user knows what they're agreeing to.
+  local yes_label, all_label, no_label = "[Y]es", "[A]ll yes", "[N]o"
+  if self._permission_options and #self._permission_options > 0 then
+    local labels = require("avante.ui.acp_confirm_adapter").map_acp_option_labels(self._permission_options)
+    if labels.yes then yes_label = "[Y] " .. labels.yes end
+    if labels.all then all_label = "[A] " .. labels.all end
+    if labels.no then no_label = "[N] " .. labels.no end
+  end
+
   local buttons_line = Line:new({
-    { "  [Y]es ", function() return focus_index == 1 and BUTTON_FOCUS or BUTTON_NORMAL end },
+    { "  " .. yes_label .. " ", function() return focus_index == 1 and BUTTON_FOCUS or BUTTON_NORMAL end },
     { "   " },
-    { "  [A]ll yes ", function() return focus_index == 2 and BUTTON_FOCUS or BUTTON_NORMAL end },
+    { "  " .. all_label .. " ", function() return focus_index == 2 and BUTTON_FOCUS or BUTTON_NORMAL end },
     { "    " },
-    { "  [N]o ", function() return focus_index == 3 and BUTTON_FOCUS or BUTTON_NORMAL end },
+    { "  " .. no_label .. " ", function() return focus_index == 3 and BUTTON_FOCUS or BUTTON_NORMAL end },
   })
 
   local buttons_content = tostring(buttons_line)
+  -- Widen the popup if the agent's labels don't fit the default width
+  win_width = math.max(win_width, #buttons_content + 4)
   local buttons_start_col = math.floor((win_width - #buttons_content) / 2)
 
   local yes_button_pos = buttons_line:get_section_pos(1, buttons_start_col)

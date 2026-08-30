@@ -939,3 +939,91 @@ describe("ACPClient", function()
     end)
   end)
 end)
+
+describe("ACPClient mode updates", function()
+  local schedule_stub
+
+  before_each(function()
+    schedule_stub = stub(vim, "schedule")
+    schedule_stub.invokes(function(fn) fn() end)
+  end)
+
+  after_each(function() schedule_stub:revert() end)
+
+  local function new_client_with_mode(handler)
+    local client = ACPClient:new({ transport_type = "stdio", handlers = { on_session_update = handler } })
+    client.config_options = {
+      {
+        id = "mode",
+        category = "mode",
+        currentValue = "default",
+        options = { { value = "default", name = "Default" }, { value = "plan", name = "Plan Mode" } },
+      },
+      { id = "model", category = "model", currentValue = "sonnet", options = {} },
+    }
+    return client
+  end
+
+  it("applies current_mode_update using the spec field currentModeId", function()
+    local received = nil
+    local client = new_client_with_mode(function(update) received = update end)
+
+    client:_handle_session_update({
+      sessionId = "s",
+      update = { sessionUpdate = "current_mode_update", currentModeId = "plan" },
+    })
+
+    assert.equals("plan", client:get_current_mode())
+    assert.is_not_nil(received)
+    assert.equals("plan", received.currentModeId)
+    -- legacy alias is populated for downstream consumers
+    assert.equals("plan", received.modeId)
+  end)
+
+  it("still accepts the legacy modeId field", function()
+    local client = new_client_with_mode(function() end)
+    client:_handle_session_update({
+      sessionId = "s",
+      update = { sessionUpdate = "current_mode_update", modeId = "plan" },
+    })
+    assert.equals("plan", client:get_current_mode())
+  end)
+
+  it("replaces config options on config_option_update", function()
+    local client = new_client_with_mode(function() end)
+    client:_handle_session_update({
+      sessionId = "s",
+      update = {
+        sessionUpdate = "config_option_update",
+        configOptions = { { id = "mode", category = "mode", currentValue = "acceptEdits", options = {} } },
+      },
+    })
+    assert.equals("acceptEdits", client:get_current_mode())
+    assert.equals("mode", client:get_mode_option().id)
+  end)
+
+  it("get_current_mode returns nil without config options", function()
+    local client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+    assert.is_nil(client:get_current_mode())
+    assert.is_nil(client:get_mode_option())
+  end)
+
+  it("set_mode sends session/set_mode and updates the local mode option", function()
+    local client = new_client_with_mode(function() end)
+    local sent = nil
+    client._send_request = function(_, method, params, cb)
+      sent = { method = method, params = params }
+      cb({}, nil)
+    end
+    local result_options
+    client:set_mode("s", "plan", function(options, err)
+      result_options = options
+      assert.is_nil(err)
+    end)
+    assert.equals("session/set_mode", sent.method)
+    assert.equals("plan", sent.params.modeId)
+    assert.equals("s", sent.params.sessionId)
+    assert.equals("plan", client:get_current_mode())
+    assert.is_not_nil(result_options)
+  end)
+end)

@@ -30,6 +30,30 @@ function M.map_acp_options(options)
   return option_map
 end
 
+---@class avante.ui.ACPConfirmAdapter.ACPMappedLabels
+---@field yes? string
+---@field all? string
+---@field no? string
+
+---Returns the agent-provided labels for the yes/all/no confirm buttons.
+---Uses the same option → button mapping as `map_acp_options`, so the label
+---shown always matches the optionId that will be sent back.
+---@param options avante.acp.PermissionOption[]
+---@return avante.ui.ACPConfirmAdapter.ACPMappedLabels
+function M.map_acp_option_labels(options)
+  local labels = { yes = nil, all = nil, no = nil }
+  for _, opt in ipairs(options) do
+    if opt.kind == "allow_once" then
+      labels.yes = opt.name
+    elseif opt.kind == "allow_always" then
+      labels.all = opt.name
+    elseif opt.kind == "reject_once" then
+      labels.no = opt.name
+    end
+  end
+  return labels
+end
+
 ---@class avante.ui.ACPConfirmAdapter.ButtonOption
 ---@field id string
 ---@field icon string
