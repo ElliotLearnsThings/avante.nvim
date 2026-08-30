@@ -560,7 +560,9 @@ M._defaults = {
         ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY"),
         ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL"),
         ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE = vim.fn.exepath("claude"),
-        ACP_PERMISSION_MODE = "bypassPermissions",
+        -- "default" | "acceptEdits" | "dontAsk" | "plan" | "bypassPermissions"; see |avante-acp|.
+        -- "bypassPermissions" makes the agent never ask, so avante's permission prompts would never show.
+        ACP_PERMISSION_MODE = "default",
       },
     },
     ["goose"] = {

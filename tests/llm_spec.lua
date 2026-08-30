@@ -389,5 +389,96 @@ describe("ACP prompt parts", function()
       assert.equals("return 1\n", sent_prompt[1].resource.text)
       assert.equals(vim.base64.encode("img"), sent_prompt[3].data)
     end)
+describe("ACP stop reasons", function()
+  it("treats end_turn and a missing stopReason as normal completion", function()
+    local notice, reason = llm.describe_acp_stop_reason("end_turn")
+    assert.is_nil(notice)
+    assert.equals("complete", reason)
+    notice, reason = llm.describe_acp_stop_reason(nil)
+    assert.is_nil(notice)
+    assert.equals("complete", reason)
+  end)
+
+  it("surfaces a distinct notice for abnormal stop reasons", function()
+    local cases = {
+      max_tokens = "max_tokens",
+      max_turn_requests = "complete",
+      refusal = "complete",
+      cancelled = "cancelled",
+    }
+    for stop_reason, expected_reason in pairs(cases) do
+      local notice, reason = llm.describe_acp_stop_reason(stop_reason)
+      assert.is_string(notice, stop_reason)
+      assert.truthy(notice:find(stop_reason, 1, true), stop_reason)
+      assert.equals(expected_reason, reason, stop_reason)
+    end
+  end)
+
+  it("still produces a notice for unknown stop reasons", function()
+    local notice, reason = llm.describe_acp_stop_reason("something_new")
+    assert.truthy(notice:find("something_new", 1, true))
+    assert.equals("complete", reason)
+  end)
+end)
+
+describe("ACP user_message_chunk", function()
+  local History = require("avante.history")
+
+  it("skips text already present in a user message", function()
+    local messages = { History.Message:new("user", "hello world", { is_user_submission = true }) }
+    assert.is_nil(llm._apply_user_message_chunk(messages, "hello"))
+    assert.is_nil(llm._apply_user_message_chunk(messages, "hello world"))
+  end)
+
+  it("creates a new user message when there is no user message to extend", function()
+    local messages = { History.Message:new("assistant", "hi") }
+    local message = llm._apply_user_message_chunk(messages, "new text")
+    assert.is_not_nil(message)
+    assert.equals("user", message.message.role)
+    assert.equals("new text", message.message.content)
+  end)
+
+  it("appends to a trailing agent-originated user message", function()
+    local messages = { History.Message:new("user", "part one ") }
+    local message = llm._apply_user_message_chunk(messages, "part two")
+    assert.equals(messages[1], message)
+    assert.equals("part one part two", message.message.content)
+  end)
+
+  it("does not append to the user's own submission", function()
+    local messages = { History.Message:new("user", "typed by user", { is_user_submission = true }) }
+    local message = llm._apply_user_message_chunk(messages, "other")
+    assert.is_not_nil(message)
+    assert.not_equals(messages[1], message)
+    assert.equals("typed by user", messages[1].message.content)
+  end)
+end)
+
+describe("ACP slash command pruning", function()
+  local Config = require("avante.config")
+
+  it("removes only commands tagged source = acp and keeps the same table", function()
+    local original = Config.slash_commands
+    Config.slash_commands = {
+      { name = "user-cmd", description = "user", details = "user" },
+      { name = "compact", description = "agent", details = "agent", source = "acp" },
+      { name = "other", description = "other", details = "other", source = "custom" },
+      { name = "review", description = "agent", details = "agent", source = "acp" },
+    }
+    local ref = Config.slash_commands
+    llm.prune_acp_slash_commands()
+    assert.equals(ref, Config.slash_commands)
+    assert.equals(2, #Config.slash_commands)
+    assert.equals("user-cmd", Config.slash_commands[1].name)
+    assert.equals("other", Config.slash_commands[2].name)
+    Config.slash_commands = original
+  end)
+
+  it("is a no-op when nothing is tagged", function()
+    local original = Config.slash_commands
+    Config.slash_commands = { { name = "x", description = "x", details = "x" } }
+    llm.prune_acp_slash_commands()
+    assert.equals(1, #Config.slash_commands)
+    Config.slash_commands = original
   end)
 end)
