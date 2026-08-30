@@ -851,6 +851,106 @@ function ACPClient:authenticate(method_id, callback)
   }, function(_result, err) callback(err) end)
 end
 
+---Convert an env table (`{ KEY = "VAL" }`) into the ACP list form
+---(`{ { name = "KEY", value = "VAL" } }`). List-form input is passed through.
+---Entries are sorted by name so the output is deterministic.
+---@param env table|nil
+---@return avante.acp.MCPEnvVar[]
+local function normalize_mcp_env(env)
+  local result = {}
+  if type(env) ~= "table" then return result end
+  if vim.islist(env) then
+    for _, item in ipairs(env) do
+      if type(item) == "table" and item.name ~= nil then
+        table.insert(result, { name = tostring(item.name), value = tostring(item.value or "") })
+      end
+    end
+    return result
+  end
+  local names = {}
+  for name, value in pairs(env) do
+    if value ~= nil and value ~= false then table.insert(names, name) end
+  end
+  table.sort(names)
+  for _, name in ipairs(names) do
+    table.insert(result, { name = tostring(name), value = tostring(env[name]) })
+  end
+  return result
+end
+
+---Normalize the user-facing `mcp_servers` configuration into the ACP
+---`mcpServers` list (https://agentclientprotocol.com/protocol/session-setup).
+---
+---Accepts either:
+---  * the raw ACP list form:
+---    `{ { name = "x", command = "...", args = {...}, env = { { name = "K", value = "V" } } }, ... }`
+---  * the friendlier keyed table form:
+---    `{ x = { command = "...", args = {...}, env = { K = "V" } }, ... }`
+---
+---HTTP/SSE servers (`type = "http"|"sse"` with a `url`) are passed through with
+---their `headers` normalized the same way as `env`. Servers without a `command`
+---(stdio) or `url` (http/sse) are dropped. Keyed entries are emitted in sorted
+---name order so the output is deterministic.
+---@param mcp_servers table|nil
+---@return avante.acp.MCPServer[]
+function ACPClient.normalize_mcp_servers(mcp_servers)
+  local result = {}
+  if type(mcp_servers) ~= "table" then return result end
+
+  ---@param name string
+  ---@param spec table
+  ---@return avante.acp.MCPServer|nil
+  local function normalize_one(name, spec)
+    if type(spec) ~= "table" or spec.disabled == true or spec.enabled == false then return nil end
+    local server_type = spec.type
+    if server_type == nil and type(spec.url) == "string" then server_type = "http" end
+    if server_type == "http" or server_type == "sse" then
+      if type(spec.url) ~= "string" or spec.url == "" then return nil end
+      return {
+        type = server_type,
+        name = name,
+        url = spec.url,
+        headers = normalize_mcp_env(spec.headers),
+      }
+    end
+    if type(spec.command) ~= "string" or spec.command == "" then return nil end
+    local args = {}
+    if type(spec.args) == "table" then
+      for _, arg in ipairs(spec.args) do
+        table.insert(args, tostring(arg))
+      end
+    end
+    return {
+      name = name,
+      command = spec.command,
+      args = args,
+      env = normalize_mcp_env(spec.env),
+    }
+  end
+
+  if vim.islist(mcp_servers) then
+    for _, spec in ipairs(mcp_servers) do
+      if type(spec) == "table" and type(spec.name) == "string" then
+        local normalized = normalize_one(spec.name, spec)
+        if normalized then table.insert(result, normalized) end
+      end
+    end
+    return result
+  end
+
+  local names = {}
+  for name, _ in pairs(mcp_servers) do
+    if type(name) == "string" then table.insert(names, name) end
+  end
+  table.sort(names)
+  for _, name in ipairs(names) do
+    local spec = mcp_servers[name]
+    local normalized = normalize_one(spec.name or name, spec)
+    if normalized then table.insert(result, normalized) end
+  end
+  return result
+end
+
 ---Create new session
 ---@param cwd string
 ---@param mcp_servers table[]?
