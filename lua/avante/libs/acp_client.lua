@@ -51,6 +51,8 @@ local Utils = require("avante.utils")
 
 ---@class avante.acp.ClientCapabilities
 ---@field fs avante.acp.FileSystemCapability
+---@field terminal boolean
+---@field _meta table<string, any>|nil
 
 ---@class avante.acp.FileSystemCapability
 ---@field readTextFile boolean
@@ -146,7 +148,7 @@ local Utils = require("avante.utils")
 ---@field rawOutput table
 
 ---@class avante.acp.BaseToolCallContent
----@field type "content" | "diff"
+---@field type "content" | "diff" | "terminal"
 
 ---@class avante.acp.ToolCallRegularContent : avante.acp.BaseToolCallContent
 ---@field type "content"
@@ -158,7 +160,33 @@ local Utils = require("avante.utils")
 ---@field oldText string|nil
 ---@field newText string
 
----@alias ACPToolCallContent avante.acp.ToolCallRegularContent | avante.acp.ToolCallDiffContent
+---@class avante.acp.ToolCallTerminalContent : avante.acp.BaseToolCallContent
+---@field type "terminal"
+---@field terminalId string
+
+---@alias ACPToolCallContent avante.acp.ToolCallRegularContent | avante.acp.ToolCallDiffContent | avante.acp.ToolCallTerminalContent
+
+---@class avante.acp.TerminalExitStatus
+---@field exitCode integer|nil
+---@field signal string|nil
+
+---@class avante.acp.Terminal
+---@field id string
+---@field session_id string|nil
+---@field command string
+---@field args string[]
+---@field cwd string|nil
+---@field output string Collected output (stdout + stderr), truncated from the beginning to byte_limit
+---@field byte_limit integer|nil
+---@field truncated boolean
+---@field exit_status avante.acp.TerminalExitStatus|nil
+---@field released boolean
+---@field virtual boolean True when output is fed by the agent (via `_meta`) instead of a spawned process
+---@field waiters fun(exit_status: avante.acp.TerminalExitStatus)[]
+---@field handle uv.uv_process_t|nil
+---@field pid integer|nil
+---@field stdout uv.uv_pipe_t|nil
+---@field stderr uv.uv_pipe_t|nil
 
 ---@class avante.acp.ToolCallLocation
 ---@field path string
@@ -261,6 +289,8 @@ local Utils = require("avante.utils")
 ---@field callbacks table<number, fun(result: table|nil, err: avante.acp.ACPError|nil)>
 ---@field pending_permissions table<number, boolean> ids of unanswered session/request_permission requests
 ---@field stderr_lines string[] last lines received on the agent's stderr
+---@field terminals table<string, avante.acp.Terminal>
+---@field terminal_counter integer
 ---@field debug_log_file file*|nil
 local ACPClient = {}
 
@@ -290,6 +320,7 @@ local LOG_SEPARATOR = string.rep("=", 80) .. "\n"
 ---@field on_request_permission? fun(tool_call: table, options: table[], callback: fun(option_id: string | nil)): nil
 ---@field on_read_file? fun(path: string, line: integer | nil, limit: integer | nil, callback: fun(content: string), error_callback: fun(message: string, code: integer|nil)): nil
 ---@field on_write_file? fun(path: string, content: string, callback: fun(error: string|nil)): nil
+---@field on_terminal_update? fun(terminal: avante.acp.Terminal): nil Called whenever terminal output or exit status changes
 ---@field on_error? fun(error: table)
 
 ---@class ACPConfig
@@ -319,11 +350,20 @@ function ACPClient:new(config)
         readTextFile = true,
         writeTextFile = true,
       },
+      terminal = true,
+      -- claude-agent-acp runs Bash itself and streams the terminal output
+      -- through `_meta.terminal_output` / `_meta.terminal_exit` on tool call
+      -- updates when this non-standard capability is advertised.
+      _meta = {
+        terminal_output = true,
+      },
     },
     debug_log_file = nil,
     callbacks = {},
     pending_permissions = {},
     stderr_lines = {},
+    terminals = {},
+    terminal_counter = 0,
     transport = nil,
     config = config or {},
     config_options = nil,
@@ -711,6 +751,16 @@ function ACPClient:_handle_notification(message_id, method, params)
     self:_handle_read_text_file(message_id, params)
   elseif method == "fs/write_text_file" then
     self:_handle_write_text_file(message_id, params)
+  elseif method == "terminal/create" then
+    self:_handle_terminal_create(message_id, params)
+  elseif method == "terminal/output" then
+    self:_handle_terminal_output(message_id, params)
+  elseif method == "terminal/wait_for_exit" then
+    self:_handle_terminal_wait_for_exit(message_id, params)
+  elseif method == "terminal/kill" then
+    self:_handle_terminal_kill(message_id, params)
+  elseif method == "terminal/release" then
+    self:_handle_terminal_release(message_id, params)
   else
     vim.notify("Unknown notification method: " .. method, vim.log.levels.WARN)
   end
@@ -854,6 +904,377 @@ function ACPClient:_handle_write_text_file(message_id, params)
   end
 end
 
+---------------------------------------------------------------------------
+-- Terminals (https://agentclientprotocol.com/protocol/terminals)
+---------------------------------------------------------------------------
+
+local SIGNAL_NAMES = {
+  [1] = "SIGHUP",
+  [2] = "SIGINT",
+  [3] = "SIGQUIT",
+  [6] = "SIGABRT",
+  [9] = "SIGKILL",
+  [13] = "SIGPIPE",
+  [14] = "SIGALRM",
+  [15] = "SIGTERM",
+}
+
+---Truncate `output` from the beginning so that it fits in `byte_limit` bytes.
+---Truncation happens on a UTF-8 character boundary so the result stays valid.
+---@param output string
+---@param byte_limit integer|nil
+---@return string output
+---@return boolean truncated
+function ACPClient.truncate_terminal_output(output, byte_limit)
+  if not byte_limit or byte_limit <= 0 or #output <= byte_limit then return output, false end
+  local start = #output - byte_limit + 1
+  -- Skip UTF-8 continuation bytes (10xxxxxx) so we start at a character boundary
+  while start <= #output do
+    local byte = output:byte(start)
+    if byte < 0x80 or byte >= 0xC0 then break end
+    start = start + 1
+  end
+  return output:sub(start), true
+end
+
+---Build a spec-shaped snapshot of a terminal (used for terminal/output and UI)
+---@param terminal avante.acp.Terminal
+---@return { output: string, truncated: boolean, exitStatus: avante.acp.TerminalExitStatus|nil }
+function ACPClient.terminal_snapshot(terminal)
+  return {
+    output = terminal.output,
+    truncated = terminal.truncated,
+    exitStatus = terminal.exit_status and vim.deepcopy(terminal.exit_status) or nil,
+  }
+end
+
+---@param terminal avante.acp.Terminal
+function ACPClient:_notify_terminal_update(terminal)
+  if self.config.handlers and self.config.handlers.on_terminal_update then
+    vim.schedule(function() self.config.handlers.on_terminal_update(terminal) end)
+  end
+end
+
+---Get a terminal by id
+---@param terminal_id string
+---@return avante.acp.Terminal|nil
+function ACPClient:get_terminal(terminal_id) return self.terminals[terminal_id] end
+
+---@class avante.acp.NewTerminalOpts
+---@field session_id? string
+---@field command? string
+---@field args? string[]
+---@field cwd? string
+---@field byte_limit? integer
+---@field virtual? boolean
+
+---Create a terminal record (without spawning anything)
+---@param terminal_id string
+---@param opts? avante.acp.NewTerminalOpts
+---@return avante.acp.Terminal
+function ACPClient:_new_terminal(terminal_id, opts)
+  opts = opts or {}
+  ---@type avante.acp.Terminal
+  local terminal = {
+    id = terminal_id,
+    session_id = opts.session_id,
+    command = opts.command or "",
+    args = opts.args or {},
+    cwd = opts.cwd,
+    output = "",
+    byte_limit = opts.byte_limit,
+    truncated = false,
+    exit_status = nil,
+    released = false,
+    virtual = opts.virtual == true,
+    waiters = {},
+  }
+  self.terminals[terminal_id] = terminal
+  return terminal
+end
+
+---Append output to a terminal, enforcing the byte limit
+---@param terminal avante.acp.Terminal
+---@param data string
+function ACPClient:_append_terminal_output(terminal, data)
+  if data == nil or data == "" then return end
+  local output, truncated = ACPClient.truncate_terminal_output(terminal.output .. data, terminal.byte_limit)
+  terminal.output = output
+  terminal.truncated = terminal.truncated or truncated
+  self:_notify_terminal_update(terminal)
+end
+
+---Mark a terminal as exited and resolve pending waiters
+---@param terminal avante.acp.Terminal
+---@param exit_status avante.acp.TerminalExitStatus
+function ACPClient:_set_terminal_exit(terminal, exit_status)
+  if terminal.exit_status then return end
+  terminal.exit_status = exit_status
+  local waiters = terminal.waiters
+  terminal.waiters = {}
+  for _, waiter in ipairs(waiters) do
+    waiter(vim.deepcopy(exit_status))
+  end
+  self:_notify_terminal_update(terminal)
+end
+
+---Ensure a "virtual" terminal exists. Used for agents (claude-agent-acp) that
+---execute commands themselves and only stream the output to the client.
+---@param terminal_id string
+---@param session_id string|nil
+---@return avante.acp.Terminal
+function ACPClient:ensure_virtual_terminal(terminal_id, session_id)
+  local terminal = self.terminals[terminal_id]
+  if terminal then return terminal end
+  return self:_new_terminal(terminal_id, { session_id = session_id, virtual = true })
+end
+
+---Feed agent-provided output into a virtual terminal
+---@param terminal_id string
+---@param data string
+---@param session_id string|nil
+function ACPClient:push_terminal_output(terminal_id, data, session_id)
+  local terminal = self:ensure_virtual_terminal(terminal_id, session_id)
+  self:_append_terminal_output(terminal, data)
+end
+
+---Feed agent-provided exit status into a virtual terminal
+---@param terminal_id string
+---@param exit_status avante.acp.TerminalExitStatus
+---@param session_id string|nil
+function ACPClient:push_terminal_exit(terminal_id, exit_status, session_id)
+  local terminal = self:ensure_virtual_terminal(terminal_id, session_id)
+  self:_set_terminal_exit(terminal, exit_status)
+end
+
+---Spawn the process backing a terminal. Split out so tests can stub it.
+---@param terminal avante.acp.Terminal
+---@param env table<string, string>|nil
+---@return string|nil error
+function ACPClient:_spawn_terminal(terminal, env)
+  local uv = vim.uv or vim.loop
+  local stdout = uv.new_pipe(false)
+  local stderr = uv.new_pipe(false)
+  if not stdout or not stderr then return "Failed to create pipes for terminal" end
+
+  local final_env = nil
+  if env and next(env) ~= nil then
+    local merged = vim.fn.environ()
+    for k, v in pairs(env) do
+      merged[k] = v
+    end
+    final_env = {}
+    for k, v in pairs(merged) do
+      final_env[#final_env + 1] = k .. "=" .. v
+    end
+  end
+
+  local function close_pipes()
+    if stdout and not stdout:is_closing() then stdout:close() end
+    if stderr and not stderr:is_closing() then stderr:close() end
+    terminal.stdout = nil
+    terminal.stderr = nil
+  end
+
+  ---@diagnostic disable-next-line: missing-fields
+  local handle, pid_or_err = uv.spawn(terminal.command, {
+    args = terminal.args,
+    cwd = terminal.cwd,
+    env = final_env,
+    stdio = { nil, stdout, stderr },
+    hide = true,
+  }, function(code, signal)
+    if terminal.handle and not terminal.handle:is_closing() then terminal.handle:close() end
+    terminal.handle = nil
+    close_pipes()
+    ---@type avante.acp.TerminalExitStatus
+    local exit_status
+    if signal and signal ~= 0 then
+      exit_status = { exitCode = nil, signal = SIGNAL_NAMES[signal] or ("SIG" .. tostring(signal)) }
+    else
+      exit_status = { exitCode = code, signal = nil }
+    end
+    self:_set_terminal_exit(terminal, exit_status)
+  end)
+
+  if not handle then
+    close_pipes()
+    return "Failed to spawn terminal command [" .. terminal.command .. "]: " .. tostring(pid_or_err)
+  end
+
+  terminal.handle = handle
+  terminal.pid = pid_or_err
+  terminal.stdout = stdout
+  terminal.stderr = stderr
+
+  local function on_read(err, data)
+    if err then return end
+    if data then self:_append_terminal_output(terminal, data) end
+  end
+  stdout:read_start(on_read)
+  stderr:read_start(on_read)
+  return nil
+end
+
+---Kill the process backing a terminal (no-op for virtual/exited terminals)
+---@param terminal avante.acp.Terminal
+function ACPClient:_kill_terminal(terminal)
+  if terminal.exit_status or not terminal.handle then return end
+  local handle = terminal.handle
+  pcall(function() handle:kill(15) end)
+  -- Escalate if the process ignores SIGTERM
+  vim.defer_fn(function()
+    if not terminal.exit_status and terminal.handle and not terminal.handle:is_closing() then
+      pcall(function() terminal.handle:kill(9) end)
+    end
+  end, 1000)
+end
+
+---Kill every terminal (optionally only those belonging to `session_id`).
+---Records are kept so the agent can still call terminal/output or terminal/release.
+---@param session_id string|nil
+function ACPClient:kill_all_terminals(session_id)
+  for _, terminal in pairs(self.terminals) do
+    if not session_id or terminal.session_id == nil or terminal.session_id == session_id then
+      self:_kill_terminal(terminal)
+    end
+  end
+end
+
+---Kill and drop every terminal
+function ACPClient:release_all_terminals()
+  for id, terminal in pairs(self.terminals) do
+    self:_kill_terminal(terminal)
+    terminal.released = true
+    self.terminals[id] = nil
+  end
+end
+
+---@param message_id number
+---@param params table
+---@return avante.acp.Terminal|nil
+function ACPClient:_lookup_terminal_for_request(message_id, params, method)
+  if not params or not params.sessionId or not params.terminalId then
+    self:_send_error(message_id, "Invalid " .. method .. " params", ACPClient.ERROR_CODES.INVALID_PARAMS)
+    return nil
+  end
+  local terminal = self.terminals[params.terminalId]
+  if not terminal then
+    self:_send_error(
+      message_id,
+      "Terminal not found: " .. tostring(params.terminalId),
+      ACPClient.ERROR_CODES.RESOURCE_NOT_FOUND
+    )
+    return nil
+  end
+  return terminal
+end
+
+---Handle terminal/create requests
+---@param message_id number
+---@param params table
+function ACPClient:_handle_terminal_create(message_id, params)
+  if not params or not params.sessionId or type(params.command) ~= "string" or params.command == "" then
+    self:_send_error(message_id, "Invalid terminal/create params", ACPClient.ERROR_CODES.INVALID_PARAMS)
+    return
+  end
+
+  self.terminal_counter = self.terminal_counter + 1
+  local terminal_id = "term-" .. tostring(self.terminal_counter)
+
+  local args = {}
+  if type(params.args) == "table" and params.args ~= vim.NIL then
+    for _, arg in ipairs(params.args) do
+      table.insert(args, tostring(arg))
+    end
+  end
+
+  local env = {}
+  if type(params.env) == "table" and params.env ~= vim.NIL then
+    for _, entry in ipairs(params.env) do
+      if type(entry) == "table" and entry.name then env[entry.name] = tostring(entry.value or "") end
+    end
+  end
+
+  local cwd = params.cwd
+  if cwd == vim.NIL or cwd == "" then cwd = nil end
+  local byte_limit = params.outputByteLimit
+  if byte_limit == vim.NIL or type(byte_limit) ~= "number" then byte_limit = nil end
+
+  local terminal = self:_new_terminal(terminal_id, {
+    session_id = params.sessionId,
+    command = params.command,
+    args = args,
+    cwd = cwd,
+    byte_limit = byte_limit,
+  })
+
+  local err = self:_spawn_terminal(terminal, env)
+  if err then
+    self.terminals[terminal_id] = nil
+    self:_send_error(message_id, err, ACPClient.ERROR_CODES.INTERNAL_ERROR)
+    return
+  end
+
+  self:_notify_terminal_update(terminal)
+  self:_send_result(message_id, { terminalId = terminal_id })
+end
+
+---Handle terminal/output requests
+---@param message_id number
+---@param params table
+function ACPClient:_handle_terminal_output(message_id, params)
+  local terminal = self:_lookup_terminal_for_request(message_id, params, "terminal/output")
+  if not terminal then return end
+  local snapshot = ACPClient.terminal_snapshot(terminal)
+  if snapshot.exitStatus then
+    if snapshot.exitStatus.exitCode == nil then snapshot.exitStatus.exitCode = vim.NIL end
+    if snapshot.exitStatus.signal == nil then snapshot.exitStatus.signal = vim.NIL end
+  end
+  self:_send_result(message_id, snapshot)
+end
+
+---Handle terminal/wait_for_exit requests
+---@param message_id number
+---@param params table
+function ACPClient:_handle_terminal_wait_for_exit(message_id, params)
+  local terminal = self:_lookup_terminal_for_request(message_id, params, "terminal/wait_for_exit")
+  if not terminal then return end
+  local function respond(exit_status)
+    self:_send_result(message_id, {
+      exitCode = exit_status.exitCode == nil and vim.NIL or exit_status.exitCode,
+      signal = exit_status.signal == nil and vim.NIL or exit_status.signal,
+    })
+  end
+  if terminal.exit_status then
+    respond(terminal.exit_status)
+    return
+  end
+  table.insert(terminal.waiters, respond)
+end
+
+---Handle terminal/kill requests
+---@param message_id number
+---@param params table
+function ACPClient:_handle_terminal_kill(message_id, params)
+  local terminal = self:_lookup_terminal_for_request(message_id, params, "terminal/kill")
+  if not terminal then return end
+  self:_kill_terminal(terminal)
+  self:_send_result(message_id, vim.empty_dict())
+end
+
+---Handle terminal/release requests
+---@param message_id number
+---@param params table
+function ACPClient:_handle_terminal_release(message_id, params)
+  local terminal = self:_lookup_terminal_for_request(message_id, params, "terminal/release")
+  if not terminal then return end
+  self:_kill_terminal(terminal)
+  terminal.released = true
+  self.terminals[terminal.id] = nil
+  self:_send_result(message_id, vim.empty_dict())
+end
+
 ---Start client
 ---@param callback fun(err: avante.acp.ACPError|nil)
 function ACPClient:connect(callback)
@@ -872,6 +1293,7 @@ end
 ---Stop client
 function ACPClient:stop()
   self.pending_permissions = {}
+  self:release_all_terminals()
   self.transport:stop()
   self:_close_debug_log()
   self.reconnect_count = 0
@@ -1250,6 +1672,7 @@ function ACPClient:cancel_session(session_id)
   -- Per spec, in-flight permission requests must be resolved with "cancelled"
   -- when the turn is cancelled.
   self:_cancel_pending_permissions()
+  self:kill_all_terminals(session_id)
   self:_send_notification("session/cancel", {
     sessionId = session_id,
   })

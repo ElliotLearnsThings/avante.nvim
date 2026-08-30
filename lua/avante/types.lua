@@ -119,6 +119,7 @@ vim.g.avante_login = vim.g.avante_login
 ---@field is_calling boolean | nil
 ---@field original_content AvanteLLMMessageContent | nil
 ---@field acp_tool_call? avante.acp.ToolCall | avante.acp.ToolCallUpdate
+---@field acp_terminals? table<string, { output: string, truncated: boolean, exitStatus: avante.acp.TerminalExitStatus|nil }> Snapshots of ACP terminals referenced by acp_tool_call.content
 
 ---@class AvanteLLMToolResult
 ---@field tool_name string

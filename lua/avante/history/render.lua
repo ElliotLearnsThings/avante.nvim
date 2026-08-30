@@ -213,10 +213,70 @@ function M.get_diff_lines(old_str, new_str, decoration, truncate)
   return lines
 end
 
+---Render the collected output of an ACP terminal (see acp_client terminals)
+---@param snapshot { output: string, truncated: boolean, exitStatus: avante.acp.TerminalExitStatus|nil } | nil
+---@param decoration string | nil
+---@param truncate boolean | nil
+---@return avante.ui.Line[]
+function M.get_terminal_lines(snapshot, decoration, truncate)
+  local lines = {}
+  if not snapshot then
+    table.insert(lines, Line:new({ { decoration }, { "...", Highlights.AVANTE_COMMENT_FG } }))
+    return lines
+  end
+  local output = snapshot.output or ""
+  output = output:gsub("\r\n", "\n"):gsub("\n+$", "")
+  if output ~= "" then
+    local text_lines = vim.split(output, "\n")
+    local max_lines = 4
+    local start_idx = 1
+    if truncate and #text_lines > max_lines then
+      start_idx = #text_lines - max_lines + 1
+      table.insert(
+        lines,
+        Line:new({
+          { decoration },
+          {
+            string.format("... (Output truncated, earlier %d lines not shown)", start_idx - 1),
+            Highlights.AVANTE_COMMENT_FG,
+          },
+        })
+      )
+    elseif snapshot.truncated then
+      table.insert(
+        lines,
+        Line:new({ { decoration }, { "... (earlier output dropped by byte limit)", Highlights.AVANTE_COMMENT_FG } })
+      )
+    end
+    for idx = start_idx, #text_lines do
+      table.insert(lines, Line:new({ { decoration }, { text_lines[idx] } }))
+    end
+  end
+  local exit_status = snapshot.exitStatus
+  if exit_status then
+    local exit_code = exit_status.exitCode
+    if exit_code == vim.NIL then exit_code = nil end
+    local signal = exit_status.signal
+    if signal == vim.NIL then signal = nil end
+    local status_text
+    if signal then
+      status_text = "terminated by " .. tostring(signal)
+    else
+      status_text = "exit code: " .. tostring(exit_code or 0)
+    end
+    local hl = (exit_code == 0 and not signal) and Highlights.AVANTE_COMMENT_FG or Highlights.AVANTE_TASK_FAILED
+    table.insert(lines, Line:new({ { decoration }, { status_text, hl } }))
+  else
+    table.insert(lines, Line:new({ { decoration }, { "running...", Highlights.AVANTE_COMMENT_FG } }))
+  end
+  return lines
+end
+
 ---@param content any
 ---@param decoration string | nil
 ---@param truncate boolean | nil
-function M.get_content_lines(content, decoration, truncate)
+---@param terminals table<string, table> | nil Terminal snapshots keyed by terminalId (for `terminal` content)
+function M.get_content_lines(content, decoration, truncate, terminals)
   local lines = {}
   local content_obj = content
   if type(content) == "string" then
@@ -324,6 +384,10 @@ function M.get_content_lines(content, decoration, truncate)
         local relative_path = Utils.relative_path(content_item.path)
         table.insert(lines, Line:new({ { decoration }, { "Path: " .. relative_path } }))
         local lines_ = M.get_diff_lines(content_item.oldText, content_item.newText, decoration, truncate)
+        lines = vim.list_extend(lines, lines_)
+      elseif content_item.type == "terminal" and content_item.terminalId then
+        local snapshot = terminals and terminals[content_item.terminalId] or nil
+        local lines_ = M.get_terminal_lines(snapshot, decoration, truncate)
         lines = vim.list_extend(lines, lines_)
       end
     end
@@ -502,7 +566,7 @@ local function tool_to_lines(item, message, messages, expanded)
     if message.acp_tool_call and message.acp_tool_call.content then
       local content = message.acp_tool_call.content
       if content then
-        local content_lines = M.get_content_lines(content, decoration, not expanded)
+        local content_lines = M.get_content_lines(content, decoration, not expanded, message.acp_terminals)
         vim.list_extend(lines, content_lines)
       end
     else

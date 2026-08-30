@@ -639,4 +639,303 @@ describe("ACPClient", function()
       assert.same({ { type = "http", name = "remote", url = "http://h/mcp", headers = {} } }, result)
     end)
   end)
+
+  describe("terminals", function()
+    local function make_client(handlers)
+      local client = ACPClient:new({ transport_type = "stdio", handlers = handlers or {} })
+      client.sent = {}
+      client.transport = {
+        send = function(_self, data) table.insert(client.sent, vim.json.decode(data)) end,
+        start = function() end,
+        stop = function() end,
+      }
+      client.state = "ready"
+      return client
+    end
+
+    local function last_sent(client) return client.sent[#client.sent] end
+
+    local function fake_spawn(on_spawn)
+      return function(_self, terminal, env)
+        terminal.handle = {
+          kill = function() end,
+          is_closing = function() return false end,
+          close = function() end,
+        }
+        if on_spawn then on_spawn(terminal, env) end
+        return nil
+      end
+    end
+
+    it("advertises the terminal capability in initialize", function()
+      local client = make_client()
+      client.state = "connected"
+      client:initialize(function() end)
+      local init = client.sent[1]
+      assert.equals("initialize", init.method)
+      assert.is_true(init.params.clientCapabilities.terminal)
+      assert.is_true(init.params.clientCapabilities._meta.terminal_output)
+      assert.is_true(init.params.clientCapabilities.fs.readTextFile)
+    end)
+
+    it("rejects terminal/create with invalid params", function()
+      local client = make_client()
+      client:_handle_message({ jsonrpc = "2.0", id = 1, method = "terminal/create", params = { sessionId = "s" } })
+      local msg = last_sent(client)
+      assert.equals(1, msg.id)
+      assert.equals(ACPClient.ERROR_CODES.INVALID_PARAMS, msg.error.code)
+    end)
+
+    it("returns RESOURCE_NOT_FOUND for unknown terminal ids", function()
+      local client = make_client()
+      for idx, method in ipairs({ "terminal/output", "terminal/wait_for_exit", "terminal/kill", "terminal/release" }) do
+        client:_handle_message({
+          jsonrpc = "2.0",
+          id = idx,
+          method = method,
+          params = { sessionId = "s", terminalId = "nope" },
+        })
+        local msg = last_sent(client)
+        assert.equals(idx, msg.id)
+        assert.equals(ACPClient.ERROR_CODES.RESOURCE_NOT_FOUND, msg.error.code)
+      end
+    end)
+
+    it("creates a terminal, streams output, waits for exit, kills and releases", function()
+      local updates = {}
+      local client = make_client({
+        on_terminal_update = function(terminal) table.insert(updates, ACPClient.terminal_snapshot(terminal)) end,
+      })
+
+      local spawned, spawned_env
+      local killed = false
+      client._spawn_terminal = fake_spawn(function(terminal, env)
+        spawned = terminal
+        spawned_env = env
+        terminal.handle.kill = function() killed = true end
+      end)
+
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 10,
+        method = "terminal/create",
+        params = {
+          sessionId = "sess",
+          command = "echo",
+          args = { "hello", "world" },
+          env = { { name = "FOO", value = "bar" } },
+          cwd = "/tmp",
+          outputByteLimit = 8,
+        },
+      })
+      local created = last_sent(client)
+      assert.equals(10, created.id)
+      local terminal_id = created.result.terminalId
+      assert.is_string(terminal_id)
+      assert.is_not_nil(client:get_terminal(terminal_id))
+      assert.equals("echo", spawned.command)
+      assert.same({ "hello", "world" }, spawned.args)
+      assert.equals("/tmp", spawned.cwd)
+      assert.equals("sess", spawned.session_id)
+      assert.same({ FOO = "bar" }, spawned_env)
+
+      -- No output yet
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 11,
+        method = "terminal/output",
+        params = { sessionId = "sess", terminalId = terminal_id },
+      })
+      local out = last_sent(client)
+      assert.equals("", out.result.output)
+      assert.is_false(out.result.truncated)
+      assert.is_nil(out.result.exitStatus)
+
+      -- wait_for_exit before exit stays pending
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 12,
+        method = "terminal/wait_for_exit",
+        params = { sessionId = "sess", terminalId = terminal_id },
+      })
+      assert.equals(11, last_sent(client).id)
+      assert.equals(1, #spawned.waiters)
+
+      -- Output arrives (exceeds the 8 byte limit -> truncated from the beginning)
+      client:_append_terminal_output(spawned, "hello ")
+      client:_append_terminal_output(spawned, "world\n")
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 13,
+        method = "terminal/output",
+        params = { sessionId = "sess", terminalId = terminal_id },
+      })
+      out = last_sent(client)
+      assert.equals("o world\n", out.result.output)
+      assert.is_true(out.result.truncated)
+      assert.is_true(#updates >= 2)
+
+      -- Process exits -> pending wait_for_exit resolves
+      client:_set_terminal_exit(spawned, { exitCode = 3, signal = nil })
+      local exited = last_sent(client)
+      assert.equals(12, exited.id)
+      assert.equals(3, exited.result.exitCode)
+      assert.equals(vim.NIL, exited.result.signal)
+      assert.equals(0, #spawned.waiters)
+
+      -- wait_for_exit after exit resolves immediately; output carries exitStatus
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 14,
+        method = "terminal/wait_for_exit",
+        params = { sessionId = "sess", terminalId = terminal_id },
+      })
+      assert.equals(14, last_sent(client).id)
+      assert.equals(3, last_sent(client).result.exitCode)
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 15,
+        method = "terminal/output",
+        params = { sessionId = "sess", terminalId = terminal_id },
+      })
+      assert.equals(3, last_sent(client).result.exitStatus.exitCode)
+
+      -- kill on an exited terminal is a harmless no-op
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 16,
+        method = "terminal/kill",
+        params = { sessionId = "sess", terminalId = terminal_id },
+      })
+      assert.equals(16, last_sent(client).id)
+      assert.is_nil(last_sent(client).error)
+      assert.is_false(killed)
+
+      -- release drops the terminal
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 17,
+        method = "terminal/release",
+        params = { sessionId = "sess", terminalId = terminal_id },
+      })
+      assert.equals(17, last_sent(client).id)
+      assert.is_nil(last_sent(client).error)
+      assert.is_nil(client:get_terminal(terminal_id))
+      assert.is_true(spawned.released)
+    end)
+
+    it("kills running terminals on terminal/kill, session cancel and stop", function()
+      local client = make_client()
+      local kills = {}
+      client._spawn_terminal = fake_spawn(function(terminal)
+        terminal.handle.kill = function(_h, sig) table.insert(kills, { terminal.id, sig }) end
+      end)
+      local defer_stub = stub(vim, "defer_fn")
+      defer_stub.invokes(function() end)
+
+      for i = 1, 3 do
+        client:_handle_message({
+          jsonrpc = "2.0",
+          id = i,
+          method = "terminal/create",
+          params = { sessionId = i == 3 and "other" or "sess", command = "sleep", args = { "100" } },
+        })
+      end
+      local ids = {}
+      for i = 1, 3 do
+        ids[i] = client.sent[i].result.terminalId
+      end
+
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 20,
+        method = "terminal/kill",
+        params = { sessionId = "sess", terminalId = ids[1] },
+      })
+      assert.same({ { ids[1], 15 } }, kills)
+      assert.is_not_nil(client:get_terminal(ids[1]))
+
+      -- Session cancel kills every terminal of that session (but keeps the records)
+      kills = {}
+      client:cancel_session("sess")
+      table.sort(kills, function(a, b) return a[1] < b[1] end)
+      assert.same({ { ids[1], 15 }, { ids[2], 15 } }, kills)
+      assert.equals("session/cancel", last_sent(client).method)
+      assert.is_not_nil(client:get_terminal(ids[2]))
+      -- Simulate the killed processes exiting
+      client:_set_terminal_exit(client:get_terminal(ids[1]), { signal = "SIGTERM" })
+      client:_set_terminal_exit(client:get_terminal(ids[2]), { signal = "SIGTERM" })
+
+      -- Stop kills whatever is still running and drops every terminal
+      kills = {}
+      client:stop()
+      assert.same({ { ids[3], 15 } }, kills)
+      assert.same({}, client.terminals)
+
+      defer_stub:revert()
+    end)
+
+    it("handles terminal/create spawn failures", function()
+      local client = make_client()
+      client._spawn_terminal = function() return "boom" end
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 30,
+        method = "terminal/create",
+        params = { sessionId = "sess", command = "definitely-not-a-command" },
+      })
+      local msg = last_sent(client)
+      assert.equals(30, msg.id)
+      assert.equals("boom", msg.error.message)
+      assert.same({}, client.terminals)
+    end)
+
+    it("truncates output on a UTF-8 character boundary", function()
+      local output, truncated = ACPClient.truncate_terminal_output("aé😀b", 5)
+      assert.is_true(truncated)
+      assert.equals("😀b", output)
+      output, truncated = ACPClient.truncate_terminal_output("abc", 10)
+      assert.is_false(truncated)
+      assert.equals("abc", output)
+    end)
+
+    it("tracks virtual terminals fed through _meta (claude-agent-acp)", function()
+      local updates = {}
+      local client = make_client({
+        on_terminal_update = function(terminal) table.insert(updates, ACPClient.terminal_snapshot(terminal)) end,
+      })
+      client:ensure_virtual_terminal("toolu_1", "sess")
+      client:push_terminal_output("toolu_1", "line 1\n", "sess")
+      client:push_terminal_output("toolu_1", "line 2\n", "sess")
+      client:push_terminal_exit("toolu_1", { exitCode = 0 }, "sess")
+      local terminal = client:get_terminal("toolu_1")
+      assert.is_true(terminal.virtual)
+      assert.equals("line 1\nline 2\n", terminal.output)
+      assert.equals(0, terminal.exit_status.exitCode)
+      assert.equals(3, #updates)
+      assert.equals(0, updates[3].exitStatus.exitCode)
+    end)
+
+    it("spawns a real process and collects its output", function()
+      local client = make_client()
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 40,
+        method = "terminal/create",
+        params = { sessionId = "sess", command = "sh", args = { "-c", "printf hi; exit 7" } },
+      })
+      local terminal_id = last_sent(client).result.terminalId
+      client:_handle_message({
+        jsonrpc = "2.0",
+        id = 41,
+        method = "terminal/wait_for_exit",
+        params = { sessionId = "sess", terminalId = terminal_id },
+      })
+      vim.wait(5000, function() return last_sent(client).id == 41 end, 10)
+      local exited = last_sent(client)
+      assert.equals(41, exited.id)
+      assert.equals(7, exited.result.exitCode)
+      assert.equals("hi", client:get_terminal(terminal_id).output)
+    end)
+  end)
 end)
