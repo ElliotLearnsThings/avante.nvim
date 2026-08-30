@@ -120,6 +120,15 @@ vim.g.avante_login = vim.g.avante_login
 ---@field original_content AvanteLLMMessageContent | nil
 ---@field acp_tool_call? avante.acp.ToolCall | avante.acp.ToolCallUpdate
 ---@field acp_terminals? table<string, { output: string, truncated: boolean, exitStatus: avante.acp.TerminalExitStatus|nil }> Snapshots of ACP terminals referenced by acp_tool_call.content
+---@field acp_tool_name? string Agent-native tool name (claude-agent-acp: `_meta.claudeCode.toolName`, e.g. "Task", "ExitPlanMode")
+---@field acp_children? avante.acp.SubagentChild[] Nested updates emitted by a subagent spawned by this tool call
+---@field acp_plan? string Plan markdown captured from an ExitPlanMode tool call
+---@field acp_subagent_prompt? string Prompt given to the subagent spawned by this tool call
+
+---@class avante.acp.SubagentChild
+---@field type "tool_call" | "text" | "thought"
+---@field tool_call? avante.acp.ToolCall | avante.acp.ToolCallUpdate present when type == "tool_call"
+---@field text? string present when type == "text" | "thought"
 
 ---@class AvanteLLMToolResult
 ---@field tool_name string

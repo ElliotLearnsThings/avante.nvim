@@ -26,6 +26,7 @@
 --- built-in one: `/clear` and `/model` always act locally (they manage
 --- Avante's own history / provider selection); every other name is handled
 --- by the agent.
+--- - `/plan [mode]`: toggle ACP plan mode (or switch to a specific ACP mode)
 ---@brief ]]
 
 ---@class avante.SlashCommands
@@ -76,6 +77,12 @@ local builtin_commands = {
     details = "Commit the changes",
     name = "commit",
   },
+  {
+    shorthelp = "Toggle ACP plan mode (or `/plan <mode>` to set a mode)",
+    description = "/plan [mode]",
+    details = "Toggle plan mode on the ACP agent session.\n/plan            toggle plan mode\n/plan <mode>     switch to a specific mode (e.g. default, acceptEdits)",
+    name = "plan",
+  },
 }
 
 ---@param commands AvanteSlashCommand[]
@@ -113,6 +120,21 @@ local callbacks = {
       api.select_acp_model()
     else
       api.select_model()
+    end
+    if cb then cb("") end
+  end,
+  plan = function(_, args, cb)
+    local Config = require("avante.config")
+    if not Config.acp_providers[Config.provider] then
+      require("avante.utils").warn("/plan is only available with ACP providers (e.g. claude-code)")
+    else
+      local selector = require("avante.acp_config_selector")
+      local mode = vim.trim(args or "")
+      if mode ~= "" then
+        selector.set_mode(mode)
+      else
+        selector.toggle_plan_mode()
+      end
     end
     if cb then cb("") end
   end,
