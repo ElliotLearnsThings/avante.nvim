@@ -27,14 +27,13 @@
 ---
 ---Permission mode (Claude Code)
 ---
----The `claude-code` ACP provider passes `ACP_PERMISSION_MODE` in the agent environment. Accepted values
----(case-insensitive) are `default`, `acceptEdits`, `dontAsk`, `plan` and `bypassPermissions` (alias `bypass`;
----a locally patched `claude-agent-acp` also accepts `auto`). Avante defaults to `default` so that the agent
----sends `session/request_permission` for tool calls and the inline permission buttons are shown when
----`behaviour.auto_approve_tool_permissions` is `false`. Note: current `@zed-industries/claude-agent-acp`
----releases resolve the initial mode from Claude Code's own settings (`permissions.defaultMode` in
----`~/.claude/settings.json`); the env var is honoured by `acp-claude-code`-style adapters. With
----`bypassPermissions` the agent never asks for permission, so avante's permission prompts never appear.
+---`@zed-industries/claude-agent-acp` takes its initial permission mode from Claude Code's own settings
+---(`permissions.defaultMode` in `~/.claude/settings.json` or the project's `.claude/settings*.json`), not from
+---the environment. Accepted values are `default`, `acceptEdits`, `dontAsk`, `plan` and `bypassPermissions`
+---(alias `bypass`). With `bypassPermissions` the agent never sends `session/request_permission`, so avante's
+---inline permission buttons never appear; use `default` (and `behaviour.auto_approve_tool_permissions = false`)
+---to be asked, or switch the mode at runtime with `:AvanteACPModes` / `<leader>am`.
+---The binary is located via `CLAUDE_CODE_EXECUTABLE`; `CLAUDE_CONFIG_DIR` and `MAX_THINKING_TOKENS` are also honoured.
 ---
 ---ACP vs Traditional Providers
 ---
