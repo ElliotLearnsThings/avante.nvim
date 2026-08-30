@@ -310,6 +310,129 @@ describe("ACPClient", function()
     end)
   end)
 
+  describe("ERROR_CODES", function()
+    it("defines the client-side codes referenced by the implementation", function()
+      assert.equals(-32010, ACPClient.ERROR_CODES.PROTOCOL_ERROR)
+      assert.equals(-32011, ACPClient.ERROR_CODES.TIMEOUT_ERROR)
+      local seen = {}
+      for name, code in pairs(ACPClient.ERROR_CODES) do
+        assert.is_nil(seen[code], "duplicate error code for " .. name)
+        seen[code] = name
+      end
+    end)
+
+    it("wait_ready reports PROTOCOL_ERROR with a numeric code when in error state", function()
+      local client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+      client.state = "error"
+      local got
+      client:wait_ready(function(err) got = err end, 0)
+      assert.is_not_nil(got)
+      assert.equals(ACPClient.ERROR_CODES.PROTOCOL_ERROR, got.code)
+    end)
+  end)
+
+  describe("permission requests", function()
+    local function new_client_with_transport(on_permission)
+      local sent = {}
+      local client = ACPClient:new({
+        transport_type = "stdio",
+        handlers = { on_request_permission = on_permission },
+      })
+      client.transport = {
+        send = function(_, data) table.insert(sent, vim.json.decode(data)) end,
+        start = function() end,
+        stop = function() end,
+      }
+      client.state = "ready"
+      return client, sent
+    end
+
+    local permission_params = {
+      sessionId = "s1",
+      toolCall = { toolCallId = "tc1", title = "bash", kind = "execute" },
+      options = {
+        { optionId = "allow", name = "Allow", kind = "allow_once" },
+        { optionId = "reject", name = "Reject", kind = "reject_once" },
+      },
+    }
+
+    it("answers with selected when the handler picks an option", function()
+      local client, sent = new_client_with_transport(function(_tool_call, _options, cb) cb("allow") end)
+      client:_handle_message({ jsonrpc = "2.0", id = 42, method = "session/request_permission", params = permission_params })
+      assert.equals(1, #sent)
+      assert.equals(42, sent[1].id)
+      assert.same({ outcome = "selected", optionId = "allow" }, sent[1].result.outcome)
+      assert.is_nil(next(client.pending_permissions))
+    end)
+
+    it("answers with cancelled when the handler passes nil", function()
+      local client, sent = new_client_with_transport(function(_tool_call, _options, cb) cb(nil) end)
+      client:_handle_message({ jsonrpc = "2.0", id = 7, method = "session/request_permission", params = permission_params })
+      assert.equals(1, #sent)
+      assert.same({ outcome = "cancelled" }, sent[1].result.outcome)
+    end)
+
+    it("cancel_session resolves in-flight permission requests with cancelled before session/cancel", function()
+      local pending_cb
+      local client, sent = new_client_with_transport(function(_tool_call, _options, cb) pending_cb = cb end)
+      client:_handle_message({ jsonrpc = "2.0", id = 9, method = "session/request_permission", params = permission_params })
+      client:_handle_message({ jsonrpc = "2.0", id = 10, method = "session/request_permission", params = permission_params })
+      assert.is_true(client.pending_permissions[9])
+      assert.is_true(client.pending_permissions[10])
+      assert.equals(0, #sent)
+
+      client:cancel_session("s1")
+
+      assert.equals(3, #sent)
+      assert.equals(9, sent[1].id)
+      assert.same({ outcome = "cancelled" }, sent[1].result.outcome)
+      assert.equals(10, sent[2].id)
+      assert.same({ outcome = "cancelled" }, sent[2].result.outcome)
+      assert.equals("session/cancel", sent[3].method)
+      assert.equals("s1", sent[3].params.sessionId)
+      assert.is_nil(next(client.pending_permissions))
+
+      -- A late answer from the UI must not produce a second response
+      pending_cb("allow")
+      assert.equals(3, #sent)
+    end)
+
+    it("cancel_session with no pending permissions only sends session/cancel", function()
+      local client, sent = new_client_with_transport(function() end)
+      client:cancel_session("s1")
+      assert.equals(1, #sent)
+      assert.equals("session/cancel", sent[1].method)
+    end)
+  end)
+
+  describe("stderr diagnostics", function()
+    it("keeps a bounded tail of stderr lines", function()
+      local client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+      for i = 1, ACPClient.STDERR_TAIL_LINES + 5 do
+        client:_record_stderr("line " .. i .. "\n")
+      end
+      assert.equals(ACPClient.STDERR_TAIL_LINES, #client.stderr_lines)
+      assert.equals("line 6", client.stderr_lines[1])
+      assert.equals("line " .. (ACPClient.STDERR_TAIL_LINES + 5), client.stderr_lines[#client.stderr_lines])
+    end)
+
+    it("includes stderr and command in the spawn failure message and fails pending callbacks", function()
+      local client = ACPClient:new({ transport_type = "stdio", command = "claude-agent-acp", args = {}, handlers = {} })
+      client:_record_stderr("Error: Cannot find module 'foo'\n")
+      local msg = client:_format_spawn_failure(1, 0)
+      assert.truthy(msg:find("claude-agent-acp", 1, true))
+      assert.truthy(msg:find("exited with code 1", 1, true))
+      assert.truthy(msg:find("Cannot find module 'foo'", 1, true))
+
+      local got
+      client.callbacks[1] = function(_, err) got = err end
+      client:_fail_pending_callbacks(client:_create_error(ACPClient.ERROR_CODES.PROTOCOL_ERROR, msg))
+      assert.is_not_nil(got)
+      assert.equals(ACPClient.ERROR_CODES.PROTOCOL_ERROR, got.code)
+      assert.is_nil(next(client.callbacks))
+    end)
+  end)
+
   describe("MCP tool flow", function()
     local MCP_TOOL_UUID = "mcp-test-uuid-12345-67890"
 

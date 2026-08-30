@@ -990,6 +990,7 @@ function M._stream_acp(opts)
   if acp_client and not is_same_acp_command_invocation then
     Utils.debug("reset stale ACP client", acp_client_config and acp_client_config.command, acp_provider.command)
     pcall(function() acp_client:stop() end)
+    M.prune_acp_slash_commands()
     acp_client = nil
     session_id = nil
     opts.acp_client = nil
@@ -1018,6 +1019,20 @@ function M._stream_acp(opts)
             vim.schedule(function()
               if opts.update_todos then opts.update_todos(todos) end
             end)
+            return
+          end
+
+          if update.sessionUpdate == "user_message_chunk" then
+            if update.content and update.content.type == "text" and update.content.text ~= "" then
+              local message = M._apply_user_message_chunk(get_history_messages(), update.content.text)
+              if message then
+                on_messages_add({ message })
+              else
+                Utils.debug("ACP user_message_chunk already present in history, skipped", update.content.text)
+              end
+            else
+              Utils.debug("ACP user_message_chunk with non-text content", update.content)
+            end
             return
           end
 
@@ -1226,6 +1241,10 @@ function M._stream_acp(opts)
             end
           end
 
+          -- A pending permission request means the tool call is in progress; the sidebar
+          -- only renders the inline permission buttons for generating/calling messages.
+          message.is_calling = true
+          message.state = "generating"
           on_messages_add({ message })
 
           local description = HistoryRender.get_tool_display_name(message)
@@ -1922,7 +1941,7 @@ function M._continue_stream_acp(opts, acp_client, session_id)
       opts.on_stop({ reason = "cancelled" })
     end,
   })
-  acp_client:send_prompt(session_id, prompt, function(_, err_)
+  acp_client:send_prompt(session_id, prompt, function(result, err_)
     if cancelled then return end
     vim.schedule(function() api.nvim_del_autocmd(stop_cmd_id) end)
     if err_ then
@@ -2051,8 +2070,101 @@ function M._continue_stream_acp(opts, acp_client, session_id)
       opts.on_stop({ reason = "error", error = err_ })
       return
     end
-    opts.on_stop({ reason = "complete" })
+    local stop_reason = type(result) == "table" and result.stopReason or nil
+    local notice, on_stop_reason = M.describe_acp_stop_reason(stop_reason)
+    if notice then
+      if opts.on_chunk then opts.on_chunk(notice) end
+      if opts.on_messages_add then
+        opts.on_messages_add({ History.Message:new("assistant", notice, { just_for_display = true }) })
+      end
+    end
+    opts.on_stop({ reason = on_stop_reason, acp_stop_reason = stop_reason })
   end)
+end
+
+---Map an ACP `session/prompt` stopReason to a user-facing notice and an on_stop reason.
+---`end_turn` (or a missing stopReason) is a normal completion and yields no notice.
+---@param stop_reason ACPStopReason|string|nil
+---@return string|nil notice markdown note to append to the chat, nil for normal completion
+---@return "complete"|"max_tokens"|"cancelled" reason value for `on_stop`
+function M.describe_acp_stop_reason(stop_reason)
+  if stop_reason == nil or stop_reason == vim.NIL or stop_reason == "end_turn" then return nil, "complete" end
+  if stop_reason == "max_tokens" then
+    return "\n*[Agent stopped: maximum output tokens reached (max_tokens).]*\n", "max_tokens"
+  end
+  if stop_reason == "max_turn_requests" then
+    return "\n*[Agent stopped: maximum number of model requests for this turn reached (max_turn_requests).]*\n",
+      "complete"
+  end
+  if stop_reason == "refusal" then return "\n*[Agent refused to continue (refusal).]*\n", "complete" end
+  if stop_reason == "cancelled" then return "\n*[Turn cancelled by the agent (cancelled).]*\n", "cancelled" end
+  return "\n*[Agent stopped: " .. tostring(stop_reason) .. ".]*\n", "complete"
+end
+
+---Merge an ACP `user_message_chunk` into the history.
+---Returns the message to (re)add, or nil when the text is already present in a user message.
+---@param messages avante.HistoryMessage[]
+---@param text string
+---@return avante.HistoryMessage|nil
+function M._apply_user_message_chunk(messages, text)
+  local function content_has_text(content)
+    if type(content) == "string" then return content:find(text, 1, true) ~= nil end
+    if type(content) == "table" then
+      for _, item in ipairs(content) do
+        if type(item) == "string" and item:find(text, 1, true) then return true end
+        if type(item) == "table" and item.type == "text" and type(item.text) == "string" and item.text:find(text, 1, true) then
+          return true
+        end
+      end
+    end
+    return false
+  end
+
+  for _, message in ipairs(messages) do
+    if message.message.role == "user" and content_has_text(message.message.content) then return nil end
+  end
+
+  local last_message = messages[#messages]
+  if last_message and last_message.message.role == "user" and not last_message.is_user_submission then
+    local content = last_message.message.content
+    if type(content) == "string" then
+      last_message.message.content = content .. text
+      return last_message
+    elseif type(content) == "table" then
+      table.insert(content, { type = "text", text = text })
+      return last_message
+    end
+  end
+
+  return History.Message:new("user", text)
+end
+
+---Remove slash commands that were provided by an ACP agent (tagged `source = "acp"`).
+---Called when an ACP client is stopped or replaced so stale agent commands do not linger.
+function M.prune_acp_slash_commands()
+  local kept = {}
+  local removed = 0
+  for _, command in ipairs(Config.slash_commands or {}) do
+    if command.source == "acp" then
+      removed = removed + 1
+    else
+      table.insert(kept, command)
+    end
+  end
+  if removed == 0 then return end
+  -- Mutate in place: other modules hold a reference to Config.slash_commands
+  for i = #Config.slash_commands, 1, -1 do
+    Config.slash_commands[i] = nil
+  end
+  for _, command in ipairs(kept) do
+    table.insert(Config.slash_commands, command)
+  end
+  local has_cmp, cmp = pcall(require, "cmp")
+  if has_cmp then
+    local avante = require("avante")
+    if avante.slash_commands_id ~= nil then cmp.unregister_source(avante.slash_commands_id) end
+    avante.slash_commands_id = cmp.register_source("avante_commands", require("cmp_avante.commands"):new())
+  end
 end
 
 ---@param opts AvanteLLMStreamOptions
