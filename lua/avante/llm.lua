@@ -993,10 +993,70 @@ function M._stream_acp(opts)
     opts.acp_client = nil
     opts.acp_session_id = nil
   end
+  ---Copy the current state of every terminal referenced by a tool call
+  ---message onto the message so the renderer can show the output.
+  ---@param message avante.HistoryMessage
+  local function sync_tool_call_terminals(message)
+    local tool_call = message.acp_tool_call
+    if not acp_client or not tool_call or type(tool_call.content) ~= "table" then return end
+    for _, item in ipairs(tool_call.content) do
+      if type(item) == "table" and item.type == "terminal" and item.terminalId then
+        local terminal = acp_client:get_terminal(item.terminalId)
+        if terminal then
+          message.acp_terminals = message.acp_terminals or {}
+          message.acp_terminals[item.terminalId] = ACPClient.terminal_snapshot(terminal)
+        end
+      end
+    end
+  end
+
+  ---Some agents (claude-agent-acp) execute commands themselves and stream the
+  ---result through `_meta` on tool call updates instead of terminal/* requests.
+  ---@param update avante.acp.ToolCallUpdate
+  local function ingest_terminal_meta(update)
+    local meta = update._meta
+    if not acp_client or type(meta) ~= "table" then return end
+    local session_id_ = opts.acp_session_id
+    local info = meta.terminal_info
+    if type(info) == "table" and info.terminal_id then
+      acp_client:ensure_virtual_terminal(info.terminal_id, session_id_)
+    end
+    local output = meta.terminal_output
+    if type(output) == "table" and output.terminal_id and type(output.data) == "string" then
+      acp_client:push_terminal_output(output.terminal_id, output.data, session_id_)
+    end
+    local exit = meta.terminal_exit
+    if type(exit) == "table" and exit.terminal_id then
+      local exit_code = exit.exit_code
+      if exit_code == vim.NIL then exit_code = nil end
+      local signal = exit.signal
+      if signal == vim.NIL then signal = nil end
+      acp_client:push_terminal_exit(exit.terminal_id, { exitCode = exit_code, signal = signal }, session_id_)
+    end
+  end
+
   if not acp_client then
     local acp_config = vim.tbl_deep_extend("force", acp_provider, {
       ---@type ACPHandlers
       handlers = {
+        on_terminal_update = function(terminal)
+          local snapshot = ACPClient.terminal_snapshot(terminal)
+          local messages = {}
+          for _, message in pairs(tool_call_messages) do
+            local tool_call = message.acp_tool_call
+            if tool_call and type(tool_call.content) == "table" then
+              for _, item in ipairs(tool_call.content) do
+                if type(item) == "table" and item.type == "terminal" and item.terminalId == terminal.id then
+                  message.acp_terminals = message.acp_terminals or {}
+                  message.acp_terminals[terminal.id] = snapshot
+                  table.insert(messages, message)
+                  break
+                end
+              end
+            end
+          end
+          if #messages > 0 then on_messages_add(messages) end
+        end,
         on_session_update = function(update)
           if update.sessionUpdate == "plan" then
             local todos = {}
@@ -1147,11 +1207,14 @@ function M._stream_acp(opts)
           end
 
           if update.sessionUpdate == "tool_call" then
-            add_tool_call_message(update)
+            ingest_terminal_meta(update)
+            local message = add_tool_call_message(update)
+            sync_tool_call_terminals(message)
             try_follow_agent_location(update)
           end
 
           if update.sessionUpdate == "tool_call_update" then
+            ingest_terminal_meta(update)
             -- Also try follow here: some ACP adapters (e.g. claude-agent-acp)
             -- send locations in tool_call_update rather than the initial tool_call
             local merged = tool_call_messages[update.toolCallId]
@@ -1192,6 +1255,7 @@ function M._stream_acp(opts)
                 is_user_declined = update.status == "cancelled",
               })
             end
+            sync_tool_call_terminals(tool_call_message)
             local messages = { tool_call_message }
             if tool_result_message then table.insert(messages, tool_result_message) end
             on_messages_add(messages)
