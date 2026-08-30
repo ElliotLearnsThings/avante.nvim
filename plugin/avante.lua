@@ -191,5 +191,10 @@ cmd("ShowRepoMap", function() require("avante.repo_map").show() end, { desc = "a
 cmd("Models", function() require("avante.model_selector").open() end, { desc = "avante: show models" })
 cmd("ACPModels", function() require("avante.api").select_acp_model() end, { desc = "avante: switch ACP model" })
 cmd("ACPModes", function() require("avante.api").select_acp_mode() end, { desc = "avante: switch ACP mode" })
+cmd(
+  "ACPSessions",
+  function() require("avante.api").select_acp_session() end,
+  { desc = "avante: browse Claude Code sessions for this project and load one" }
+)
 cmd("History", function() require("avante.api").select_history() end, { desc = "avante: show histories" })
 cmd("Stop", function() require("avante.api").stop() end, { desc = "avante: stop current AI request" })
