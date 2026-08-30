@@ -91,3 +91,30 @@ describe("ACPConfirmAdapter", function()
     end)
   end)
 end)
+
+describe("ACPConfirmAdapter.map_acp_option_labels", function()
+  it("maps ExitPlanMode option labels consistently with map_acp_options", function()
+    -- claude-agent-acp ExitPlanMode options (non-root: bypassPermissions is prepended)
+    local options = {
+      { kind = "allow_always", name = "Yes, and bypass permissions", optionId = "bypassPermissions" },
+      { kind = "allow_always", name = "Yes, and auto-accept edits", optionId = "acceptEdits" },
+      { kind = "allow_once", name = "Yes, and manually approve edits", optionId = "default" },
+      { kind = "reject_once", name = "No, keep planning", optionId = "plan" },
+    }
+    local labels = ACPConfirmAdapter.map_acp_option_labels(options)
+    local ids = ACPConfirmAdapter.map_acp_options(options)
+    assert.equals("Yes, and manually approve edits", labels.yes)
+    assert.equals("default", ids.yes)
+    assert.equals("Yes, and auto-accept edits", labels.all)
+    assert.equals("acceptEdits", ids.all)
+    assert.equals("No, keep planning", labels.no)
+    assert.equals("plan", ids.no)
+  end)
+
+  it("returns nil labels for missing kinds", function()
+    local labels = ACPConfirmAdapter.map_acp_option_labels({ { kind = "reject_always", name = "x", optionId = "x" } })
+    assert.is_nil(labels.yes)
+    assert.is_nil(labels.all)
+    assert.is_nil(labels.no)
+  end)
+end)

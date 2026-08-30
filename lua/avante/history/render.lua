@@ -331,6 +331,192 @@ function M.get_content_lines(content, decoration, truncate)
   return lines
 end
 
+--- Claude Code tool names (from `_meta.claudeCode.toolName`) that spawn a subagent.
+local SUBAGENT_TOOL_NAMES = { Task = true, Agent = true }
+
+---Whether this message is an ACP tool call that spawned a subagent
+---(Claude Code `Task`/`Agent`). Falls back to a "think" tool call that has
+---received nested child updates.
+---@param message avante.HistoryMessage
+---@return boolean
+function M.is_subagent_tool_call(message)
+  if SUBAGENT_TOOL_NAMES[message.acp_tool_name or ""] then return true end
+  local call = message.acp_tool_call
+  return call ~= nil and call.kind == "think" and message.acp_children ~= nil and #message.acp_children > 0
+end
+
+---Whether this message is an ACP tool call presenting a plan for approval
+---(Claude Code `ExitPlanMode`, ACP kind "switch_mode").
+---@param message avante.HistoryMessage
+---@return boolean
+function M.is_plan_tool_call(message)
+  if message.acp_tool_name == "ExitPlanMode" then return true end
+  local call = message.acp_tool_call
+  return call ~= nil and call.kind == "switch_mode"
+end
+
+---Extracts the first text block from ACP tool call content, if any.
+---@param content ACPToolCallContent[] | nil
+---@return string | nil
+function M.get_first_text_content(content)
+  if type(content) ~= "table" or not islist(content) then return nil end
+  for _, item in ipairs(content) do
+    if
+      type(item) == "table"
+      and item.type == "content"
+      and type(item.content) == "table"
+      and item.content.type == "text"
+      and type(item.content.text) == "string"
+    then
+      return item.content.text
+    end
+  end
+  return nil
+end
+
+---Returns the plan markdown for a plan tool call.
+---@param message avante.HistoryMessage
+---@return string | nil
+function M.get_plan_text(message)
+  if type(message.acp_plan) == "string" then return message.acp_plan end
+  local call = message.acp_tool_call
+  if not call then return nil end
+  if type(call.rawInput) == "table" and type(call.rawInput.plan) == "string" then return call.rawInput.plan end
+  return M.get_first_text_content(call.content)
+end
+
+---Returns the prompt given to a subagent.
+---@param message avante.HistoryMessage
+---@return string | nil
+function M.get_subagent_prompt(message)
+  if type(message.acp_subagent_prompt) == "string" then return message.acp_subagent_prompt end
+  local call = message.acp_tool_call
+  if not call then return nil end
+  if type(call.rawInput) == "table" and type(call.rawInput.prompt) == "string" then return call.rawInput.prompt end
+  return nil
+end
+
+local CHILD_STATUS_ICON = {
+  pending = "…",
+  in_progress = "…",
+  completed = "✓",
+  failed = "✗",
+  cancelled = "⊘",
+}
+
+local CHILD_STATUS_TO_STATE = {
+  pending = "generating",
+  in_progress = "generating",
+  completed = "succeeded",
+  failed = "failed",
+  cancelled = "failed",
+}
+
+---Renders the body of a subagent (Task/Agent) tool call: prompt, streamed
+---progress (nested tool calls and text emitted by the subagent) and result.
+---@param message avante.HistoryMessage
+---@param decoration string
+---@param expanded boolean | nil
+---@return avante.ui.Line[]
+function M.subagent_to_lines(message, decoration, expanded)
+  local lines = {}
+  local call = message.acp_tool_call or {}
+  local input = type(call.rawInput) == "table" and call.rawInput or {}
+  local commentfg = Highlights.AVANTE_COMMENT_FG
+
+  if type(input.subagent_type) == "string" and input.subagent_type ~= "" then
+    table.insert(lines, Line:new({ { decoration }, { "Agent: " .. input.subagent_type, commentfg } }))
+  end
+
+  local prompt = M.get_subagent_prompt(message)
+  if prompt and prompt ~= "" then
+    table.insert(lines, Line:new({ { decoration }, { "Prompt:", commentfg } }))
+    vim.list_extend(lines, text_to_truncated_lines(prompt, decoration, not expanded))
+  end
+
+  local children = message.acp_children or {}
+  if #children > 0 then
+    if #lines > 0 then table.insert(lines, Line:new({ { decoration }, { "" } })) end
+    table.insert(lines, Line:new({ { decoration }, { "Progress:", commentfg } }))
+    for _, child in ipairs(children) do
+      if child.type == "tool_call" then
+        local tc = child.tool_call or {}
+        local status = tc.status or "pending"
+        local icon = CHILD_STATUS_ICON[status] or "…"
+        local hl = STATE_TO_HL[CHILD_STATUS_TO_STATE[status] or "generating"]
+        local title = tc.title or tc.kind or "tool"
+        table.insert(lines, Line:new({ { decoration }, { "├─ " }, { " " .. icon .. " " .. title .. " ", hl } }))
+        if expanded and tc.content then
+          vim.list_extend(lines, M.get_content_lines(tc.content, decoration .. "│   ", false))
+        end
+      elseif child.type == "text" or child.type == "thought" then
+        local prefix = child.type == "thought" and "> " or ""
+        local text_lines = vim.split(child.text or "", "\n")
+        --- trim trailing empty lines
+        while #text_lines > 0 and text_lines[#text_lines] == "" do
+          table.remove(text_lines, #text_lines)
+        end
+        local start_idx = 1
+        if not expanded and #text_lines > 3 then
+          start_idx = #text_lines - 2
+          table.insert(
+            lines,
+            Line:new({
+              { decoration },
+              { string.format("│  ... (%d earlier lines not shown)", start_idx - 1), commentfg },
+            })
+          )
+        end
+        for idx = start_idx, #text_lines do
+          table.insert(lines, Line:new({ { decoration }, { "│  " .. prefix .. text_lines[idx] } }))
+        end
+      end
+    end
+  end
+
+  if call.status == "completed" or call.status == "failed" then
+    local result_text = M.get_first_text_content(call.content)
+    -- the initial tool_call content is the prompt; only show content as a
+    -- result if it changed (the shim replaces content with the tool result)
+    if call.content and result_text ~= prompt then
+      if #lines > 0 then table.insert(lines, Line:new({ { decoration }, { "" } })) end
+      table.insert(lines, Line:new({ { decoration }, { call.status == "failed" and "Error:" or "Result:", commentfg } }))
+      vim.list_extend(lines, M.get_content_lines(call.content, decoration, not expanded))
+    end
+  end
+
+  return lines
+end
+
+---Renders the body of a plan (ExitPlanMode) tool call: the full plan
+---markdown plus the approval outcome.
+---@param message avante.HistoryMessage
+---@param decoration string
+---@return avante.ui.Line[]
+function M.plan_to_lines(message, decoration)
+  local lines = {}
+  local call = message.acp_tool_call or {}
+  local commentfg = Highlights.AVANTE_COMMENT_FG
+  local plan = M.get_plan_text(message)
+  if plan and plan ~= "" then
+    -- Plans are meant to be read in full, so never truncate them
+    vim.list_extend(lines, text_to_lines(plan, decoration))
+  else
+    table.insert(lines, Line:new({ { decoration }, { "(no plan content)", commentfg } }))
+  end
+  if call.status == "completed" then
+    table.insert(lines, Line:new({ { decoration }, { "" } }))
+    table.insert(lines, Line:new({ { decoration }, { "Plan approved, leaving plan mode.", commentfg } }))
+  elseif call.status == "failed" then
+    table.insert(lines, Line:new({ { decoration }, { "" } }))
+    table.insert(lines, Line:new({ { decoration }, { "Plan rejected, still in plan mode.", commentfg } }))
+  elseif message.is_calling or call.status == "pending" or call.status == "in_progress" then
+    table.insert(lines, Line:new({ { decoration }, { "" } }))
+    table.insert(lines, Line:new({ { decoration }, { "Waiting for approval to leave plan mode...", commentfg } }))
+  end
+  return lines
+end
+
 ---@param message avante.HistoryMessage
 ---@return string tool_name
 ---@return string | nil error
@@ -349,6 +535,10 @@ function M.get_tool_display_name(message)
     native_tool_name = message.acp_tool_call.title or "Other"
   end
   if message.acp_tool_call and message.acp_tool_call.title then native_tool_name = message.acp_tool_call.title end
+  if not message.displayed_tool_name then
+    if M.is_subagent_tool_call(message) then return "Subagent: " .. native_tool_name, nil end
+    if M.is_plan_tool_call(message) then return "Plan: " .. native_tool_name, nil end
+  end
   local tool_name = native_tool_name
   if message.displayed_tool_name then
     tool_name = message.displayed_tool_name
@@ -406,6 +596,29 @@ function M.get_tool_display_name(message)
   return tool_name, nil
 end
 
+---Closes a tool block: adds a placeholder body when empty, strips trailing
+---blank lines and draws the bottom corner on the last line.
+---@param lines avante.ui.Line[]
+---@param decoration string
+---@param state string
+---@return avante.ui.Line[]
+local function finish_tool_lines(lines, decoration, state)
+  if #lines <= 1 then
+    if state == "generating" then
+      table.insert(lines, Line:new({ { decoration }, { "...", Highlights.AVANTE_COMMENT_FG } }))
+    else
+      table.insert(lines, Line:new({ { decoration }, { "completed" } }))
+    end
+  end
+  --- remove last empty lines
+  while #lines > 1 and lines[#lines].sections[2] and lines[#lines].sections[2][1] == "" do
+    table.remove(lines, #lines)
+  end
+  local last_line = lines[#lines]
+  last_line.sections[1][1] = "╰─  "
+  return lines
+end
+
 ---Converts a tool invocation into format suitable for UI
 ---@param item AvanteLLMMessageContentItem
 ---@param message avante.HistoryMessage
@@ -443,6 +656,14 @@ local function tool_to_lines(item, message, messages, expanded)
   )
   -- if logs then vim.list_extend(lines, tool_logs_to_lines(item.name, logs)) end
   local decoration = "│   "
+  if M.is_subagent_tool_call(message) then
+    vim.list_extend(lines, M.subagent_to_lines(message, decoration, expanded))
+    return finish_tool_lines(lines, decoration, state)
+  end
+  if M.is_plan_tool_call(message) then
+    vim.list_extend(lines, M.plan_to_lines(message, decoration))
+    return finish_tool_lines(lines, decoration, state)
+  end
   if rest_input_text_lines and #rest_input_text_lines > 0 then
     local lines_ = text_to_lines(table.concat(rest_input_text_lines, "\n"), decoration)
     local line_count = 0
@@ -515,20 +736,7 @@ local function tool_to_lines(item, message, messages, expanded)
       end
     end
   end
-  if #lines <= 1 then
-    if state == "generating" then
-      table.insert(lines, Line:new({ { decoration }, { "...", Highlights.AVANTE_COMMENT_FG } }))
-    else
-      table.insert(lines, Line:new({ { decoration }, { "completed" } }))
-    end
-  end
-  --- remove last empty lines
-  while #lines > 0 and lines[#lines].sections[2] and lines[#lines].sections[2][1] == "" do
-    table.remove(lines, #lines)
-  end
-  local last_line = lines[#lines]
-  last_line.sections[1][1] = "╰─  "
-  return lines
+  return finish_tool_lines(lines, decoration, state)
 end
 
 ---Converts a message item into representation suitable for UI
@@ -548,7 +756,11 @@ local function message_content_item_to_lines(item, message, messages, expanded)
     elseif item.type == "image" then
       return { Line:new({ { "![image](" .. item.source.media_type .. ": " .. item.source.data .. ")" } }) }
     elseif item.type == "tool_use" and item.name then
-      local ok, llm_tool = pcall(require, "avante.llm_tools." .. item.name)
+      -- ACP tool calls use ACP "kind"s as names (think, execute, ...); they are
+      -- not avante native tools, so never dispatch them to llm_tools renderers
+      -- (e.g. kind "think" must not be rendered by llm_tools/think.lua).
+      local ok, llm_tool = false, nil
+      if not message.acp_tool_call then ok, llm_tool = pcall(require, "avante.llm_tools." .. item.name) end
       if ok then
         local tool_result_message = Helpers.get_tool_result_message(item.id, messages)
         ---@cast llm_tool AvanteLLMTool

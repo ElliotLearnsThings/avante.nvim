@@ -218,6 +218,15 @@ local Utils = require("avante.utils")
 ---@field sessionUpdate "available_commands_update"
 ---@field availableCommands avante.acp.AvailableCommand[]
 
+---@class avante.acp.CurrentModeUpdate : avante.acp.BaseSessionUpdate
+---@field sessionUpdate "current_mode_update"
+---@field currentModeId string
+---@field modeId string legacy alias, normalized by the client
+
+---@class avante.acp.ConfigOptionUpdate : avante.acp.BaseSessionUpdate
+---@field sessionUpdate "config_option_update"
+---@field configOptions avante.acp.ConfigOption[]
+
 ---@class avante.acp.PermissionOption
 ---@field optionId string
 ---@field name string
@@ -266,7 +275,7 @@ ACPClient.ERROR_CODES = {
 local LOG_SEPARATOR = string.rep("=", 80) .. "\n"
 
 ---@class ACPHandlers
----@field on_session_update? fun(update: avante.acp.UserMessageChunk | avante.acp.AgentMessageChunk | avante.acp.AgentThoughtChunk | avante.acp.ToolCallUpdate | avante.acp.PlanUpdate | avante.acp.AvailableCommandsUpdate)
+---@field on_session_update? fun(update: avante.acp.UserMessageChunk | avante.acp.AgentMessageChunk | avante.acp.AgentThoughtChunk | avante.acp.ToolCallUpdate | avante.acp.PlanUpdate | avante.acp.AvailableCommandsUpdate | avante.acp.CurrentModeUpdate | avante.acp.ConfigOptionUpdate)
 ---@field on_request_permission? fun(tool_call: table, options: table[], callback: fun(option_id: string | nil)): nil
 ---@field on_read_file? fun(path: string, line: integer | nil, limit: integer | nil, callback: fun(content: string), error_callback: fun(message: string, code: integer|nil)): nil
 ---@field on_write_file? fun(path: string, content: string, callback: fun(error: string|nil)): nil
@@ -670,13 +679,20 @@ function ACPClient:_handle_session_update(params)
     self.config_options = update.configOptions
   end
 
-  -- Handle legacy current_mode_update notification
-  if update.sessionUpdate == "current_mode_update" and update.modeId then
-    if self.config_options then
-      for _, opt in ipairs(self.config_options) do
-        if opt.id == "mode" and opt.category == "mode" then
-          opt.currentValue = update.modeId
-          break
+  -- Handle current_mode_update notification.
+  -- The ACP spec (and claude-agent-acp) use `currentModeId`; older agents
+  -- used `modeId`. Accept both and normalize so downstream handlers see both.
+  if update.sessionUpdate == "current_mode_update" then
+    local mode_id = update.currentModeId or update.modeId
+    if mode_id then
+      update.currentModeId = mode_id
+      update.modeId = mode_id
+      if self.config_options then
+        for _, opt in ipairs(self.config_options) do
+          if opt.id == "mode" and opt.category == "mode" then
+            opt.currentValue = mode_id
+            break
+          end
         end
       end
     end
@@ -950,6 +966,24 @@ function ACPClient:set_mode(session_id, mode_id, callback)
     end
     callback(self.config_options, nil)
   end)
+end
+
+---Returns the mode config option (category "mode"), if the agent exposes one.
+---@return avante.acp.ConfigOption|nil
+function ACPClient:get_mode_option()
+  if not self.config_options then return nil end
+  for _, opt in ipairs(self.config_options) do
+    if opt.category == "mode" then return opt end
+  end
+  return nil
+end
+
+---Returns the currently selected mode id, if known.
+---@return string|nil
+function ACPClient:get_current_mode()
+  local opt = self:get_mode_option()
+  if opt and type(opt.currentValue) == "string" then return opt.currentValue end
+  return nil
 end
 
 ---Set session model via non-standard session/set_model API.

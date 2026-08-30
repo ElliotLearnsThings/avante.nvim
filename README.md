@@ -783,6 +783,7 @@ Built-in slash commands for common operations:
 - `/compact` - Compact history messages to save tokens
 - `/lines <start>-<end> <question>` - Ask about specific lines
 - `/commit` - Generate commit message for changes
+- `/plan [mode]` - Toggle plan mode on the ACP agent session (e.g. Claude Code), or switch to a specific ACP mode
 
 #### Shortcuts (`#` trigger)
 

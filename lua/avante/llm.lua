@@ -956,6 +956,58 @@ function M._stream_acp(opts)
       end
     end
   end
+  ---Child updates (nested tool calls emitted by a Claude Code subagent) keyed
+  ---by their toolCallId, pointing at the parent message and the child entry.
+  ---@type table<string, { parent: avante.HistoryMessage, entry: avante.acp.SubagentChild }>
+  local subagent_child_entries = {}
+
+  ---claude-agent-acp attaches Claude Code specific info under `_meta.claudeCode`
+  ---(`toolName`, `parentToolUseId`, `toolResponse`).
+  ---@param update table
+  ---@return table|nil
+  local function get_claude_code_meta(update)
+    local meta = update._meta
+    if type(meta) ~= "table" then return nil end
+    local cc = meta.claudeCode
+    if type(cc) ~= "table" then return nil end
+    return cc
+  end
+
+  ---@param update table
+  ---@return string|nil
+  local function get_parent_tool_use_id(update)
+    local cc = get_claude_code_meta(update)
+    local parent_id = cc and cc.parentToolUseId
+    if type(parent_id) == "string" and parent_id ~= "" then return parent_id end
+    return nil
+  end
+
+  ---Records Claude Code specific details on a tool call message so the
+  ---renderer can recognise subagents (Task/Agent) and plans (ExitPlanMode)
+  ---even after the shim replaces title/content with the tool result.
+  ---@param message avante.HistoryMessage
+  ---@param update avante.acp.ToolCall | avante.acp.ToolCallUpdate
+  local function annotate_tool_call_message(message, update)
+    local cc = get_claude_code_meta(update)
+    if cc and type(cc.toolName) == "string" and not message.acp_tool_name then message.acp_tool_name = cc.toolName end
+    local finished = update.status == "completed" or update.status == "failed" or update.status == "cancelled"
+    local raw_input = type(update.rawInput) == "table" and update.rawInput or nil
+    if HistoryRender.is_plan_tool_call(message) and not message.acp_plan then
+      if raw_input and type(raw_input.plan) == "string" then
+        message.acp_plan = raw_input.plan
+      elseif not finished then
+        message.acp_plan = HistoryRender.get_first_text_content(update.content)
+      end
+    end
+    if HistoryRender.is_subagent_tool_call(message) and not message.acp_subagent_prompt then
+      if raw_input and type(raw_input.prompt) == "string" then
+        message.acp_subagent_prompt = raw_input.prompt
+      elseif not finished then
+        message.acp_subagent_prompt = HistoryRender.get_first_text_content(update.content)
+      end
+    end
+  end
+
   local function add_tool_call_message(update)
     local message = History.Message:new("assistant", {
       type = "tool_use",
@@ -967,6 +1019,7 @@ function M._stream_acp(opts)
     })
     last_tool_call_message = message
     message.acp_tool_call = update
+    annotate_tool_call_message(message, update)
     if update.status == "pending" or update.status == "in_progress" then message.is_calling = true end
     tool_call_messages[update.toolCallId] = message
     if update.rawInput then
@@ -1017,6 +1070,66 @@ function M._stream_acp(opts)
               if opts.update_todos then opts.update_todos(todos) end
             end)
             return
+          end
+
+          if update.sessionUpdate == "current_mode_update" or update.sessionUpdate == "config_option_update" then
+            -- The client already updated its config_options; refresh the
+            -- winbar ("provider | model | mode") so the new mode is visible.
+            if update.sessionUpdate == "current_mode_update" and update.currentModeId then
+              Utils.info("ACP mode: " .. update.currentModeId)
+            end
+            vim.schedule(function()
+              local sidebar = require("avante").get()
+              if sidebar and sidebar:is_open() then sidebar:render_result() end
+            end)
+            return
+          end
+
+          -- Updates emitted from inside a Claude Code subagent (Task/Agent)
+          -- carry `_meta.claudeCode.parentToolUseId`. Nest them under the
+          -- parent tool call instead of interleaving them with the main
+          -- conversation.
+          local parent_tool_use_id = get_parent_tool_use_id(update)
+          if parent_tool_use_id then
+            local parent = tool_call_messages[parent_tool_use_id]
+            if parent then
+              parent.acp_children = parent.acp_children or {}
+              local children = parent.acp_children
+              if update.sessionUpdate == "tool_call" then
+                ---@type avante.acp.SubagentChild
+                local entry = { type = "tool_call", tool_call = update }
+                table.insert(children, entry)
+                subagent_child_entries[update.toolCallId] = { parent = parent, entry = entry }
+                on_messages_add({ parent })
+                return
+              elseif
+                (update.sessionUpdate == "agent_message_chunk" or update.sessionUpdate == "agent_thought_chunk")
+                and update.content
+                and update.content.type == "text"
+              then
+                local child_type = update.sessionUpdate == "agent_thought_chunk" and "thought" or "text"
+                local last = children[#children]
+                if last and last.type == child_type then
+                  last.text = last.text .. update.content.text
+                else
+                  table.insert(children, { type = child_type, text = update.content.text })
+                end
+                on_messages_add({ parent })
+                return
+              end
+            end
+          end
+
+          if update.sessionUpdate == "tool_call_update" then
+            -- Some child updates (e.g. the PostToolUse hook) carry no parent
+            -- meta, so route by toolCallId instead.
+            local child = subagent_child_entries[update.toolCallId]
+            if child then
+              if update.content and next(update.content) == nil then update.content = nil end
+              child.entry.tool_call = vim.tbl_deep_extend("force", child.entry.tool_call, update)
+              on_messages_add({ child.parent })
+              return
+            end
           end
 
           if update.sessionUpdate == "agent_message_chunk" then
@@ -1175,6 +1288,7 @@ function M._stream_acp(opts)
               if update.content and next(update.content) == nil then update.content = nil end
               tool_call_message.acp_tool_call = vim.tbl_deep_extend("force", tool_call_message.acp_tool_call, update)
             end
+            annotate_tool_call_message(tool_call_message, update)
             tool_call_message.tool_use_logs = tool_call_message.tool_use_logs or {}
             tool_call_message.tool_use_log_lines = tool_call_message.tool_use_log_lines or {}
             local tool_result_message
@@ -1235,18 +1349,28 @@ function M._stream_acp(opts)
           ---@cast tool_call avante.acp.ToolCall
 
           local message = tool_call_messages[tool_call.toolCallId]
-          if not message then
+          local child = subagent_child_entries[tool_call.toolCallId]
+          local description
+          if child then
+            -- Permission request for a tool run by a subagent: keep it nested
+            -- under the parent instead of creating a top-level message.
+            if tool_call.content and next(tool_call.content) == nil then tool_call.content = nil end
+            child.entry.tool_call = vim.tbl_deep_extend("force", child.entry.tool_call, tool_call)
+            message = child.parent
+            description = "Subagent tool: " .. (tool_call.title or child.entry.tool_call.title or tool_call.kind or "")
+          elseif not message then
             message = add_tool_call_message(tool_call)
           else
             if message.acp_tool_call then
               if tool_call.content and next(tool_call.content) == nil then tool_call.content = nil end
               message.acp_tool_call = vim.tbl_deep_extend("force", message.acp_tool_call, tool_call)
             end
+            annotate_tool_call_message(message, tool_call)
           end
 
           on_messages_add({ message })
 
-          local description = HistoryRender.get_tool_display_name(message)
+          if not description then description = HistoryRender.get_tool_display_name(message) end
           LLMToolHelpers.confirm(description, function(ok)
             local acp_mapped_options = ACPConfirmAdapter.map_acp_options(options)
 
