@@ -1493,6 +1493,213 @@ function M._load_acp_session_and_continue(opts, acp_client, session_id)
   end)
 end
 
+---Maximum size (in bytes) of a file that will be sent inline as an embedded
+---`resource` prompt part. Larger files fall back to a `resource_link`.
+M.ACP_EMBEDDED_RESOURCE_MAX_BYTES = 200 * 1024
+
+local ACP_IMAGE_MIME_TYPES = {
+  png = "image/png",
+  jpg = "image/jpeg",
+  jpeg = "image/jpeg",
+  gif = "image/gif",
+  webp = "image/webp",
+  bmp = "image/bmp",
+  svg = "image/svg+xml",
+}
+
+local ACP_TEXT_MIME_TYPES = {
+  lua = "text/x-lua",
+  py = "text/x-python",
+  js = "text/javascript",
+  ts = "text/typescript",
+  jsx = "text/jsx",
+  tsx = "text/tsx",
+  json = "application/json",
+  md = "text/markdown",
+  html = "text/html",
+  css = "text/css",
+  yaml = "application/yaml",
+  yml = "application/yaml",
+  toml = "application/toml",
+  sh = "text/x-shellscript",
+  rs = "text/x-rust",
+  go = "text/x-go",
+  c = "text/x-c",
+  h = "text/x-c",
+  cpp = "text/x-c++",
+  java = "text/x-java",
+  txt = "text/plain",
+}
+
+---Detect the image MIME type of a file from its extension.
+---@param path string
+---@return string | nil
+function M.acp_image_mime_type(path)
+  local ext = vim.fn.fnamemodify(path, ":e"):lower()
+  return ACP_IMAGE_MIME_TYPES[ext]
+end
+
+---Read a file from disk and return its content base64-encoded.
+---@param path string
+---@return string | nil data
+---@return string | nil err
+function M.acp_read_file_base64(path)
+  local file, err = io.open(path, "rb")
+  if not file then return nil, err end
+  local content = file:read("*a")
+  file:close()
+  if not content then return nil, "Failed to read " .. path end
+  return vim.base64.encode(content), nil
+end
+
+---Extract `image: <path>` lines (the format produced by the clipboard paste
+---template) from a piece of text.
+---@param text string
+---@return string[]
+function M.extract_image_paths_from_text(text)
+  local paths = {}
+  if type(text) ~= "string" or not text:find("image: ", 1, true) then return paths end
+  for line in text:gmatch("[^\r\n]+") do
+    local image_path = line:match("^%s*image:%s*(.-)%s*$")
+    if image_path and image_path ~= "" then table.insert(paths, image_path) end
+  end
+  return paths
+end
+
+---Collect image paths attached to the current request: explicit
+---`opts.prompt_opts.image_paths` plus `image: <path>` lines in the latest user
+---message of the history (how the sidebar records clipboard pastes).
+---@param opts AvanteLLMStreamOptions
+---@return string[]
+function M.collect_acp_image_paths(opts)
+  local seen = {}
+  local paths = {}
+  local function add(path)
+    if not path or path == "" or seen[path] then return end
+    seen[path] = true
+    table.insert(paths, path)
+  end
+
+  if opts.prompt_opts and opts.prompt_opts.image_paths then
+    for _, path in ipairs(opts.prompt_opts.image_paths) do
+      add(path)
+    end
+  end
+
+  local history_messages = opts.history_messages or {}
+  for i = #history_messages, 1, -1 do
+    local message = history_messages[i] and history_messages[i].message
+    if message and message.role == "user" then
+      local content = message.content
+      if type(content) == "string" then
+        for _, path in ipairs(M.extract_image_paths_from_text(content)) do
+          add(path)
+        end
+      elseif type(content) == "table" then
+        for _, item in ipairs(content) do
+          local text = type(item) == "string" and item or (type(item) == "table" and item.type == "text" and item.text)
+          if text then
+            for _, path in ipairs(M.extract_image_paths_from_text(text)) do
+              add(path)
+            end
+          end
+        end
+      end
+      break
+    end
+  end
+
+  if #paths == 0 and type(opts.instructions) == "string" then
+    for _, path in ipairs(M.extract_image_paths_from_text(opts.instructions)) do
+      add(path)
+    end
+  end
+
+  return paths
+end
+
+---Keyed by provider name so the "agent does not support images" warning is
+---only shown once per provider.
+M._acp_image_unsupported_warned = {}
+
+---Build ACP prompt parts for the images attached to the request.
+---If the agent advertises `promptCapabilities.image` the image is sent inline
+---as base64; otherwise a warning is emitted once and a `resource_link` to the
+---file is sent instead.
+---@param opts AvanteLLMStreamOptions
+---@param acp_client avante.acp.ACPClient
+---@return table[]
+function M.build_acp_image_parts(opts, acp_client)
+  local parts = {}
+  local image_paths = M.collect_acp_image_paths(opts)
+  if #image_paths == 0 then return parts end
+
+  local supports_image = acp_client:supports_prompt_capability("image")
+  if not supports_image then
+    local provider_name = Config.provider or "acp"
+    if not M._acp_image_unsupported_warned[provider_name] then
+      M._acp_image_unsupported_warned[provider_name] = true
+      Utils.warn(
+        string.format(
+          "ACP agent '%s' does not advertise image support; attached images will be sent as file links instead.",
+          provider_name
+        ),
+        { title = "Avante" }
+      )
+    end
+  end
+
+  for _, image_path in ipairs(image_paths) do
+    local abs_path = Utils.to_absolute_path(image_path)
+    local file_name = vim.fn.fnamemodify(abs_path, ":t")
+    local mime_type = M.acp_image_mime_type(abs_path)
+    local part = nil
+    if supports_image then
+      if not mime_type then
+        Utils.warn("Unknown image type for " .. abs_path .. ", sending as file link", { title = "Avante" })
+      else
+        local data, err = M.acp_read_file_base64(abs_path)
+        if not data then
+          Utils.warn("Failed to read image " .. abs_path .. ": " .. tostring(err), { title = "Avante" })
+        else
+          part = acp_client:create_image_content(data, mime_type, "file://" .. abs_path)
+        end
+      end
+    end
+    if not part then part = acp_client:create_resource_link_content("file://" .. abs_path, file_name, nil, mime_type) end
+    table.insert(parts, part)
+  end
+
+  return parts
+end
+
+---Build the ACP prompt part for a selected file. When the agent advertises
+---`promptCapabilities.embeddedContext` and the file is small enough, the file
+---content is embedded inline as a text `resource`; otherwise a `resource_link`
+---is used.
+---@param filepath string
+---@param acp_client avante.acp.ACPClient
+---@return table
+function M.build_acp_file_part(filepath, acp_client)
+  local abs_path = Utils.to_absolute_path(filepath)
+  local file_name = vim.fn.fnamemodify(abs_path, ":t")
+  local uri = "file://" .. abs_path
+  local ext = vim.fn.fnamemodify(abs_path, ":e"):lower()
+  local mime_type = ACP_TEXT_MIME_TYPES[ext]
+
+  if acp_client:supports_prompt_capability("embeddedContext") and not ACP_IMAGE_MIME_TYPES[ext] then
+    local lines, err = Utils.read_file_from_buf_or_disk(abs_path)
+    if lines and not err then
+      local text = table.concat(lines, "\n")
+      if #text <= M.ACP_EMBEDDED_RESOURCE_MAX_BYTES then
+        return acp_client:create_resource_content(acp_client:create_text_resource(uri, text, mime_type))
+      end
+    end
+  end
+
+  return acp_client:create_resource_link_content(uri, file_name, nil, mime_type)
+end
+
 ---@param opts AvanteLLMStreamOptions
 ---@param acp_client avante.acp.ACPClient
 ---@param session_id string
@@ -1502,10 +1709,7 @@ function M._continue_stream_acp(opts, acp_client, session_id)
   if donot_use_builtin_system_prompt then
     if opts.selected_filepaths then
       for _, filepath in ipairs(opts.selected_filepaths) do
-        local abs_path = Utils.to_absolute_path(filepath)
-        local file_name = vim.fn.fnamemodify(abs_path, ":t")
-        local prompt_item = acp_client:create_resource_link_content("file://" .. abs_path, file_name)
-        table.insert(prompt, prompt_item)
+        table.insert(prompt, M.build_acp_file_part(filepath, acp_client))
       end
     end
     if opts.selected_code then
@@ -1712,6 +1916,11 @@ function M._continue_stream_acp(opts, acp_client, session_id)
       end
     end
   end
+
+  for _, image_part in ipairs(M.build_acp_image_parts(opts, acp_client)) do
+    table.insert(prompt, image_part)
+  end
+
   local cancelled = false
   local stop_cmd_id = api.nvim_create_autocmd("User", {
     group = group,

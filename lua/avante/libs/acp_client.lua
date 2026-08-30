@@ -243,6 +243,7 @@ local Utils = require("avante.utils")
 ---@field protocol_version number
 ---@field capabilities avante.acp.ClientCapabilities
 ---@field agent_capabilities avante.acp.AgentCapabilities|nil
+---@field prompt_capabilities avante.acp.PromptCapabilities|nil
 ---@field config_options avante.acp.ConfigOption[]|nil
 ---@field _legacy_api boolean|nil Whether agent uses old modes/models API instead of configOptions
 ---@field config ACPConfig
@@ -816,7 +817,8 @@ function ACPClient:initialize(callback)
 
     -- Update protocol version and capabilities
     self.protocol_version = result.protocolVersion
-    self.agent_capabilities = result.agentCapabilities
+    self.agent_capabilities = result.agentCapabilities or {}
+    self.prompt_capabilities = self.agent_capabilities.promptCapabilities or {}
     self.auth_methods = result.authMethods or {}
 
     -- Check if we need to authenticate
@@ -1175,6 +1177,22 @@ function ACPClient:create_text_content(text, annotations)
     annotations = annotations,
   }
 end
+
+---Get the prompt capabilities advertised by the agent in the `initialize` response.
+---Returns an empty table until the client has been initialized.
+---@return avante.acp.PromptCapabilities
+function ACPClient:get_prompt_capabilities()
+  if self.prompt_capabilities then return self.prompt_capabilities end
+  if self.agent_capabilities and self.agent_capabilities.promptCapabilities then
+    return self.agent_capabilities.promptCapabilities
+  end
+  return {}
+end
+
+---Check whether the agent advertised support for a given prompt capability.
+---@param name "image" | "audio" | "embeddedContext"
+---@return boolean
+function ACPClient:supports_prompt_capability(name) return self:get_prompt_capabilities()[name] == true end
 
 ---Helper function: Create image content block
 ---@param data string Base64 encoded image data
