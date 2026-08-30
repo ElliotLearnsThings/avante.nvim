@@ -2835,7 +2835,11 @@ function Sidebar:handle_submit(request)
     ---@type AvanteSlashCommand
     local cmd = vim.iter(cmds):filter(function(cmd) return cmd.name == command end):totable()[1]
     if cmd then
-      if cmd.callback then
+      if require("avante.slashcommands").is_acp_command(cmd) then
+        -- Agent-provided command: forward the raw "/name args" text to
+        -- session/prompt unchanged, bypassing Avante's own handling.
+        cmd.callback(self, args, function(prompt) request = prompt end)
+      elseif cmd.callback then
         if command == "lines" then
           cmd.callback(self, args, function(args_)
             local _, _, question = args_:match("(%d+)-(%d+)%s+(.*)")

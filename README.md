@@ -809,6 +809,8 @@ Built-in slash commands for common operations:
 - `/lines <start>-<end> <question>` - Ask about specific lines
 - `/commit` - Generate commit message for changes
 
+ACP agents (for example Claude Code through `claude-agent-acp`) can advertise their own commands (`/compact`, `/context`, `/model`, skills, plugin commands, ...). Avante registers them in `Config.slash_commands` with `source = "acp"` and replaces that set on every `available_commands_update`, so they show up in every completion source that reads `require("avante.utils").get_commands()` (the bundled nvim-cmp source, `blink.compat`, and `Kaiser-Yang/blink-cmp-avante`). Submitting an agent command sends the raw `/name args` text to the agent unchanged. If the agent advertises a name that collides with a built-in command, `/clear` and `/model` keep acting locally; every other name is handled by the agent.
+
 #### Shortcuts (`#` trigger)
 
 Shortcuts provide quick access to predefined prompt templates. You can customize these in your config:

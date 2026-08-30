@@ -1200,30 +1200,10 @@ function M._stream_acp(opts)
           end
 
           if update.sessionUpdate == "available_commands_update" then
-            local commands = update.availableCommands
-            local has_cmp, cmp = pcall(require, "cmp")
-            if has_cmp then
-              local slash_commands_id = require("avante").slash_commands_id
-              if slash_commands_id ~= nil then cmp.unregister_source(slash_commands_id) end
-              for _, command in ipairs(commands) do
-                local exists = false
-                for _, command_ in ipairs(Config.slash_commands) do
-                  if command_.name == command.name then
-                    exists = true
-                    break
-                  end
-                end
-                if not exists then
-                  table.insert(Config.slash_commands, {
-                    name = command.name,
-                    description = command.description,
-                    details = command.description,
-                  })
-                end
-              end
-              local avante = require("avante")
-              avante.slash_commands_id = cmp.register_source("avante_commands", require("cmp_avante.commands"):new())
-            end
+            -- Replace (not append) the ACP-sourced command set. Completion
+            -- sources read `Utils.get_commands()` lazily, so no cmp source
+            -- re-registration is needed.
+            require("avante.slashcommands").set_acp_commands(update.availableCommands)
           end
         end,
 
