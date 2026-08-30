@@ -45,6 +45,17 @@ describe("slashcommands ACP integration", function()
     assert.equals(3, #Config.slash_commands)
   end)
 
+  it("mutates Config.slash_commands in place (no shadow field on the proxy)", function()
+    local ref = Config.slash_commands
+    SlashCommands.set_acp_commands({ { name = "context", description = "" } })
+    assert.equals(ref, Config.slash_commands)
+    assert.equals(2, #ref)
+    SlashCommands.clear_acp_commands()
+    assert.equals(ref, Config.slash_commands)
+    assert.equals(1, #ref)
+    assert.equals("mine", ref[1].name)
+  end)
+
   it("clears all ACP commands", function()
     SlashCommands.set_acp_commands({ { name = "context", description = "" } })
     SlashCommands.clear_acp_commands()

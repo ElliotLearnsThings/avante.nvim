@@ -251,7 +251,7 @@ end
 function M.refresh(provider_name)
   -- Drop slash commands advertised by the previous ACP agent when switching provider
   if Config.provider ~= provider_name then
-    pcall(function() require("avante.llm").prune_acp_slash_commands() end)
+    pcall(function() require("avante.slashcommands").clear_acp_commands() end)
   end
   require("avante.config").override({ provider = provider_name })
 

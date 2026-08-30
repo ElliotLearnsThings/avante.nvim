@@ -1053,17 +1053,20 @@ function M._stream_acp(opts)
   if acp_client and not is_same_acp_command_invocation then
     Utils.debug("reset stale ACP client", acp_client_config and acp_client_config.command, acp_provider.command)
     pcall(function() acp_client:stop() end)
-    M.prune_acp_slash_commands()
+    require("avante.slashcommands").clear_acp_commands()
     acp_client = nil
     session_id = nil
     opts.acp_client = nil
     opts.acp_session_id = nil
   end
   ---Copy the current state of every terminal referenced by a tool call
-  ---message onto the message so the renderer can show the output.
+  ---onto the message so the renderer can show the output. `tool_call`
+  ---defaults to the message's own tool call; subagent children pass their
+  ---nested tool call so the snapshots land on the parent message.
   ---@param message avante.HistoryMessage
-  local function sync_tool_call_terminals(message)
-    local tool_call = message.acp_tool_call
+  ---@param tool_call? avante.acp.ToolCall | avante.acp.ToolCallUpdate
+  local function sync_tool_call_terminals(message, tool_call)
+    tool_call = tool_call or message.acp_tool_call
     if not acp_client or not tool_call or type(tool_call.content) ~= "table" then return end
     for _, item in ipairs(tool_call.content) do
       if type(item) == "table" and item.type == "terminal" and item.terminalId then
@@ -1107,18 +1110,33 @@ function M._stream_acp(opts)
       handlers = {
         on_terminal_update = function(terminal)
           local snapshot = ACPClient.terminal_snapshot(terminal)
+          ---@param tool_call table|nil
+          ---@return boolean
+          local function references_terminal(tool_call)
+            if not tool_call or type(tool_call.content) ~= "table" then return false end
+            for _, item in ipairs(tool_call.content) do
+              if type(item) == "table" and item.type == "terminal" and item.terminalId == terminal.id then
+                return true
+              end
+            end
+            return false
+          end
           local messages = {}
           for _, message in pairs(tool_call_messages) do
-            local tool_call = message.acp_tool_call
-            if tool_call and type(tool_call.content) == "table" then
-              for _, item in ipairs(tool_call.content) do
-                if type(item) == "table" and item.type == "terminal" and item.terminalId == terminal.id then
-                  message.acp_terminals = message.acp_terminals or {}
-                  message.acp_terminals[terminal.id] = snapshot
-                  table.insert(messages, message)
+            local referenced = references_terminal(message.acp_tool_call)
+            if not referenced then
+              -- Terminals run by a subagent live on the nested child tool calls.
+              for _, child in ipairs(message.acp_children or {}) do
+                if child.type == "tool_call" and references_terminal(child.tool_call) then
+                  referenced = true
                   break
                 end
               end
+            end
+            if referenced then
+              message.acp_terminals = message.acp_terminals or {}
+              message.acp_terminals[terminal.id] = snapshot
+              table.insert(messages, message)
             end
           end
           if #messages > 0 then on_messages_add(messages) end
@@ -1131,10 +1149,30 @@ function M._stream_acp(opts)
           local replay = rawget(opts, "_acp_replay")
           if replay and replay.skip and REPLAYED_UPDATE_KINDS[update.sessionUpdate] then return end
 
+          -- Terminal output streamed through `_meta` must be ingested for
+          -- every tool call, including those nested under a subagent.
+          if update.sessionUpdate == "tool_call" or update.sessionUpdate == "tool_call_update" then
+            ingest_terminal_meta(update)
+          end
+
           if update.sessionUpdate == "user_message_chunk" then
-            -- Outside of replay the user's own submission is already in the
-            -- history, so echoed user chunks are ignored.
-            if not replay or update.content.type ~= "text" then return end
+            if not update.content or update.content.type ~= "text" then
+              Utils.debug("ACP user_message_chunk with non-text content", update.content)
+              return
+            end
+            if not replay then
+              -- Outside of replay the user's own submission is normally
+              -- already in the history; only add text that is missing.
+              if update.content.text ~= "" then
+                local message = M._apply_user_message_chunk(get_history_messages(), update.content.text)
+                if message then
+                  on_messages_add({ message })
+                else
+                  Utils.debug("ACP user_message_chunk already present in history, skipped", update.content.text)
+                end
+              end
+              return
+            end
             local messages = get_history_messages()
             local last_message = messages[#messages]
             if last_message and last_message.message.role == "user" and last_message.is_user_submission then
@@ -1152,6 +1190,8 @@ function M._stream_acp(opts)
           end
 
           if update.sessionUpdate == "plan" then
+            -- A subagent's own TodoWrite must not clobber the top-level plan.
+            if get_parent_tool_use_id(update) then return end
             local todos = {}
             for idx, entry in ipairs(update.entries) do
               local status = "todo"
@@ -1169,20 +1209,6 @@ function M._stream_acp(opts)
             vim.schedule(function()
               if opts.update_todos then opts.update_todos(todos) end
             end)
-            return
-          end
-
-          if update.sessionUpdate == "user_message_chunk" then
-            if update.content and update.content.type == "text" and update.content.text ~= "" then
-              local message = M._apply_user_message_chunk(get_history_messages(), update.content.text)
-              if message then
-                on_messages_add({ message })
-              else
-                Utils.debug("ACP user_message_chunk already present in history, skipped", update.content.text)
-              end
-            else
-              Utils.debug("ACP user_message_chunk with non-text content", update.content)
-            end
             return
           end
 
@@ -1214,6 +1240,7 @@ function M._stream_acp(opts)
                 local entry = { type = "tool_call", tool_call = update }
                 table.insert(children, entry)
                 subagent_child_entries[update.toolCallId] = { parent = parent, entry = entry }
+                sync_tool_call_terminals(parent, entry.tool_call)
                 on_messages_add({ parent })
                 return
               elseif
@@ -1241,6 +1268,7 @@ function M._stream_acp(opts)
             if child then
               if update.content and next(update.content) == nil then update.content = nil end
               child.entry.tool_call = vim.tbl_deep_extend("force", child.entry.tool_call, update)
+              sync_tool_call_terminals(child.parent, child.entry.tool_call)
               on_messages_add({ child.parent })
               return
             end
@@ -1374,14 +1402,12 @@ function M._stream_acp(opts)
           end
 
           if update.sessionUpdate == "tool_call" then
-            ingest_terminal_meta(update)
             local message = add_tool_call_message(update)
             sync_tool_call_terminals(message)
             try_follow_agent_location(update)
           end
 
           if update.sessionUpdate == "tool_call_update" then
-            ingest_terminal_meta(update)
             -- Also try follow here: some ACP adapters (e.g. claude-agent-acp)
             -- send locations in tool_call_update rather than the initial tool_call
             local merged = tool_call_messages[update.toolCallId]
@@ -2385,34 +2411,6 @@ function M._apply_user_message_chunk(messages, text)
   end
 
   return History.Message:new("user", text)
-end
-
----Remove slash commands that were provided by an ACP agent (tagged `source = "acp"`).
----Called when an ACP client is stopped or replaced so stale agent commands do not linger.
-function M.prune_acp_slash_commands()
-  local kept = {}
-  local removed = 0
-  for _, command in ipairs(Config.slash_commands or {}) do
-    if command.source == "acp" then
-      removed = removed + 1
-    else
-      table.insert(kept, command)
-    end
-  end
-  if removed == 0 then return end
-  -- Mutate in place: other modules hold a reference to Config.slash_commands
-  for i = #Config.slash_commands, 1, -1 do
-    Config.slash_commands[i] = nil
-  end
-  for _, command in ipairs(kept) do
-    table.insert(Config.slash_commands, command)
-  end
-  local has_cmp, cmp = pcall(require, "cmp")
-  if has_cmp then
-    local avante = require("avante")
-    if avante.slash_commands_id ~= nil then cmp.unregister_source(avante.slash_commands_id) end
-    avante.slash_commands_id = cmp.register_source("avante_commands", require("cmp_avante.commands"):new())
-  end
 end
 
 ---@param opts AvanteLLMStreamOptions

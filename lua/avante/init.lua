@@ -104,7 +104,7 @@ function M.cleanup_all_acp_clients()
     end
   end
   M.acp_clients = {}
-  pcall(function() require("avante.llm").prune_acp_slash_commands() end)
+  pcall(function() require("avante.slashcommands").clear_acp_commands() end)
   Utils.debug("All ACP clients cleaned up")
 end
 

@@ -261,10 +261,6 @@ local Utils = require("avante.utils")
 ---@field currentModeId string
 ---@field modeId string legacy alias, normalized by the client
 
----@class avante.acp.ConfigOptionUpdate : avante.acp.BaseSessionUpdate
----@field sessionUpdate "config_option_update"
----@field configOptions avante.acp.ConfigOption[]
-
 ---@class avante.acp.PermissionOption
 ---@field optionId string
 ---@field name string
@@ -567,6 +563,10 @@ function ACPClient:_create_stdio_transport()
         transport_self.process:close()
         transport_self.process = nil
       end
+
+      -- The agent process is gone, so every session it knew about must be
+      -- re-created / re-loaded on the next connection.
+      self.active_session_ids = {}
 
       -- Handle auto-reconnect
       if self.config.reconnect and self.reconnect_count < (self.config.max_reconnect_attempts or 3) then
@@ -1312,6 +1312,7 @@ end
 ---Stop client
 function ACPClient:stop()
   self.pending_permissions = {}
+  self.active_session_ids = {}
   self:release_all_terminals()
   self.transport:stop()
   self:_close_debug_log()
