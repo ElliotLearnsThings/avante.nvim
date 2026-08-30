@@ -238,6 +238,78 @@ describe("ACPClient", function()
     end)
   end)
 
+  describe("prompt capabilities", function()
+    local function make_client(init_result)
+      local client
+      local mock_transport = {
+        send = function(self, data)
+          local decoded = vim.json.decode(data)
+          if decoded.method == "initialize" then
+            vim.schedule(function() client:_handle_message({ jsonrpc = "2.0", id = decoded.id, result = init_result }) end)
+          end
+        end,
+        start = function(self, on_message) end,
+        stop = function(self) end,
+      }
+      client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+      client.transport = mock_transport
+      client.state = "connected"
+      return client
+    end
+
+    it("returns an empty table before initialization", function()
+      local client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+      assert.same({}, client:get_prompt_capabilities())
+      assert.is_false(client:supports_prompt_capability("image"))
+    end)
+
+    it("stores promptCapabilities from the initialize response", function()
+      local client = make_client({
+        protocolVersion = 1,
+        agentCapabilities = {
+          loadSession = true,
+          promptCapabilities = { image = true, embeddedContext = true },
+        },
+      })
+
+      local init_err = "not called"
+      client:initialize(function(err) init_err = err end)
+
+      assert.is_nil(init_err)
+      assert.same({ image = true, embeddedContext = true }, client:get_prompt_capabilities())
+      assert.is_true(client:supports_prompt_capability("image"))
+      assert.is_true(client:supports_prompt_capability("embeddedContext"))
+      assert.is_false(client:supports_prompt_capability("audio"))
+    end)
+
+    it("treats missing promptCapabilities as unsupported", function()
+      local client = make_client({ protocolVersion = 1, agentCapabilities = { loadSession = false } })
+      client:initialize(function() end)
+
+      assert.same({}, client:get_prompt_capabilities())
+      assert.is_false(client:supports_prompt_capability("image"))
+      assert.is_false(client:supports_prompt_capability("embeddedContext"))
+    end)
+  end)
+
+  describe("content constructors", function()
+    it("builds image content blocks", function()
+      local client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+      assert.same(
+        { type = "image", data = "AAAA", mimeType = "image/png", uri = "file:///tmp/a.png" },
+        client:create_image_content("AAAA", "image/png", "file:///tmp/a.png")
+      )
+    end)
+
+    it("builds embedded text resource blocks", function()
+      local client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+      assert.same(
+        { type = "resource", resource = { uri = "file:///tmp/a.lua", text = "print(1)", mimeType = "text/x-lua" } },
+        client:create_resource_content(client:create_text_resource("file:///tmp/a.lua", "print(1)", "text/x-lua"))
+      )
+    end)
+  end)
+
   describe("MCP tool flow", function()
     local MCP_TOOL_UUID = "mcp-test-uuid-12345-67890"
 
