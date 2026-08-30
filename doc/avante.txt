@@ -2627,7 +2627,7 @@ What is ACP?
 Before using ACP agents, ensure you have the required tools installed:
 
 - **For Gemini CLI**: Install the `gemini` CLI tool and set your `GEMINI_API_KEY`
-- **For Claude Code**: Install the `acp-claude-code` package via npm and set your `ANTHROPIC_API_KEY`
+- **For Claude Code**: Install the `claude` CLI and the `claude-agent-acp` shim (`npm i -g @zed-industries/claude-agent-acp`); either log in with `claude auth login` or set `ANTHROPIC_API_KEY`
 
 ACP vs Traditional Providers
 
