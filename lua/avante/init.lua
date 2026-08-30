@@ -152,6 +152,9 @@ function H.keymaps()
   vim.keymap.set("n", "<Plug>(AvanteSelectACPModel)", function() require("avante.api").select_acp_model() end, {
     noremap = true,
   })
+  vim.keymap.set("n", "<Plug>(AvanteSelectACPSession)", function() require("avante.api").select_acp_session() end, {
+    desc = "avante: browse Claude Code sessions",
+  })
   vim.keymap.set("n", "<Plug>(AvanteSelectACPMode)", function() require("avante.api").select_acp_mode() end, {
     noremap = true,
   })
@@ -246,6 +249,12 @@ function H.keymaps()
       Config.mappings.select_acp_mode,
       "<Plug>(AvanteSelectACPMode)",
       { desc = "avante: select ACP mode" }
+    )
+    Utils.safe_keymap_set(
+      "n",
+      Config.mappings.select_acp_session,
+      "<Plug>(AvanteSelectACPSession)",
+      { desc = "avante: browse Claude Code sessions" }
     )
 
     Utils.safe_keymap_set(

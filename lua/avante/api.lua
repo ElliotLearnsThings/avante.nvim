@@ -264,6 +264,9 @@ function M.select_acp_model() require("avante.acp_config_selector").open_model()
 
 function M.select_acp_mode() require("avante.acp_config_selector").open_mode() end
 
+---Browse Claude Code CLI sessions for the current project and load one into a new chat
+function M.select_acp_session() require("avante.acp_sessions").open(vim.api.nvim_get_current_buf()) end
+
 function M.select_history()
   local buf = vim.api.nvim_get_current_buf()
   require("avante.history_selector").open(buf, function(filename)
@@ -275,6 +278,19 @@ function M.select_history()
       sidebar:update_content_with_history()
       sidebar:create_todos_container()
       sidebar:initialize_token_count()
+      -- Re-attach the agent to the history's ACP session (session/load) so the
+      -- next prompt continues the agent-side conversation instead of failing
+      -- with "Session not found" and falling back to recovery.
+      local Config = require("avante.config")
+      if
+        Config.acp_providers[Config.provider]
+        and sidebar.chat_history
+        and sidebar.chat_history.acp_session_id
+        and sidebar.chat_history.acp_session_id ~= ""
+        and not sidebar.is_generating
+      then
+        sidebar:handle_submit("")
+      end
       vim.schedule(function() sidebar:focus_input() end)
     end)
   end)

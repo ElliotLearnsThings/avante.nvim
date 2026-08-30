@@ -370,6 +370,10 @@ function ACPClient:new(config)
     state = "disconnected",
     reconnect_count = 0,
     heartbeat_timer = nil,
+    -- Session IDs that have been created/loaded on this agent process.
+    -- The agent only knows about sessions established over this connection,
+    -- so a persisted session id must go through session/load before prompting.
+    active_session_ids = {},
   }, { __index = self })
 
   client:_setup_transport()
@@ -1483,7 +1487,44 @@ function ACPClient:create_session(cwd, mcp_servers, callback)
       return
     end
     self:_convert_legacy_session_fields(result)
+    self.active_session_ids[result.sessionId] = true
     callback(result.sessionId, nil)
+  end)
+end
+
+---Whether the given session has been created or loaded on this connection
+---@param session_id string
+---@return boolean
+function ACPClient:is_session_active(session_id) return self.active_session_ids[session_id] == true end
+
+---Whether the connected agent advertises the loadSession capability
+---@return boolean
+function ACPClient:supports_load_session()
+  return self.agent_capabilities ~= nil and self.agent_capabilities.loadSession == true
+end
+
+---Whether the connected agent advertises session/list (sessionCapabilities.list)
+---@return boolean
+function ACPClient:supports_list_sessions()
+  local caps = self.agent_capabilities
+  return caps ~= nil and type(caps.sessionCapabilities) == "table" and caps.sessionCapabilities.list ~= nil
+end
+
+---List sessions known to the agent (session/list)
+---@param cwd string|nil
+---@param callback fun(sessions: table[]|nil, err: avante.acp.ACPError|nil)
+function ACPClient:list_sessions(cwd, callback)
+  callback = callback or function() end
+  if not self:supports_list_sessions() then
+    callback(nil, self:_create_error(self.ERROR_CODES.PROTOCOL_ERROR, "Agent does not support listing sessions"))
+    return
+  end
+  self:_send_request("session/list", { cwd = cwd }, function(result, err)
+    if err then
+      callback(nil, err)
+      return
+    end
+    callback(result and result.sessions or {}, nil)
   end)
 end
 
@@ -1508,6 +1549,7 @@ function ACPClient:load_session(session_id, cwd, mcp_servers, callback)
     mcpServers = mcp_servers or {},
   }, function(result, err)
     if result then self:_convert_legacy_session_fields(result) end
+    if not err then self.active_session_ids[session_id] = true end
     callback(result, err)
   end)
 end
