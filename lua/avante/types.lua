@@ -594,9 +594,8 @@ vim.g.avante_login = vim.g.avante_login
 ---@field details string
 ---@field shorthelp? string
 ---@field hint? string argument hint (from ACP `input.hint`), e.g. "[model]"
----@field source? "acp" set for commands advertised by an ACP agent
----@field callback? AvanteSlashCommandCallback
 ---@field source? "acp" | string origin of a dynamically registered command (ACP agents set "acp")
+---@field callback? AvanteSlashCommandCallback
 
 ---@alias AvanteMentions "codebase" | "diagnostics" | "file" | "quickfix" | "buffers"
 ---@alias AvanteMentionCallback fun(args: string, cb?: fun(args: string): nil): nil

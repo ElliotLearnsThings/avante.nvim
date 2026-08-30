@@ -190,9 +190,17 @@ end
 ---@return AvanteSlashCommand[] registered ACP commands
 function M.set_acp_commands(commands)
   local Config = require("avante.config")
-  local kept = {}
-  for _, command in ipairs(Config.slash_commands or {}) do
-    if not M.is_acp_command(command) then table.insert(kept, command) end
+  -- `Config` is a metatable proxy over `Config._options` without `__newindex`,
+  -- so assigning `Config.slash_commands = ...` would create a shadow field.
+  -- Mutate the existing table in place instead (other modules hold a
+  -- reference to it as well).
+  local slash_commands = Config.slash_commands
+  if type(slash_commands) ~= "table" then
+    slash_commands = {}
+    Config._options.slash_commands = slash_commands
+  end
+  for i = #slash_commands, 1, -1 do
+    if M.is_acp_command(slash_commands[i]) then table.remove(slash_commands, i) end
   end
   local registered = {}
   local seen = {}
@@ -201,12 +209,11 @@ function M.set_acp_commands(commands)
       if not seen[command.name] then
         seen[command.name] = true
         local slash_command = M.from_acp_command(command)
-        table.insert(kept, slash_command)
+        table.insert(slash_commands, slash_command)
         table.insert(registered, slash_command)
       end
     end
   end
-  Config.slash_commands = kept
   return registered
 end
 

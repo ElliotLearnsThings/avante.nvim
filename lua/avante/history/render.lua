@@ -511,7 +511,7 @@ function M.subagent_to_lines(message, decoration, expanded)
         local title = tc.title or tc.kind or "tool"
         table.insert(lines, Line:new({ { decoration }, { "├─ " }, { " " .. icon .. " " .. title .. " ", hl } }))
         if expanded and tc.content then
-          vim.list_extend(lines, M.get_content_lines(tc.content, decoration .. "│   ", false))
+          vim.list_extend(lines, M.get_content_lines(tc.content, decoration .. "│   ", false, message.acp_terminals))
         end
       elseif child.type == "text" or child.type == "thought" then
         local prefix = child.type == "thought" and "> " or ""

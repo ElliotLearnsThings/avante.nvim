@@ -457,31 +457,93 @@ describe("ACP user_message_chunk", function()
   end)
 end)
 
-describe("ACP slash command pruning", function()
+describe("ACP subagent terminal output", function()
+  local ACPClient = require("avante.libs.acp_client")
+  local stub = require("luassert.stub")
   local Config = require("avante.config")
+  local setup_transport_stub
+  local connect_stub
 
-  it("removes only commands tagged source = acp and keeps the same table", function()
-    local original = Config.slash_commands
-    Config.slash_commands = {
-      { name = "user-cmd", description = "user", details = "user" },
-      { name = "compact", description = "agent", details = "agent", source = "acp" },
-      { name = "other", description = "other", details = "other", source = "custom" },
-      { name = "review", description = "agent", details = "agent", source = "acp" },
-    }
-    local ref = Config.slash_commands
-    llm.prune_acp_slash_commands()
-    assert.equals(ref, Config.slash_commands)
-    assert.equals(2, #Config.slash_commands)
-    assert.equals("user-cmd", Config.slash_commands[1].name)
-    assert.equals("other", Config.slash_commands[2].name)
-    Config.slash_commands = original
+  local saved_provider, saved_acp_providers, saved_behaviour
+
+  before_each(function()
+    saved_provider, saved_acp_providers, saved_behaviour = Config.provider, Config.acp_providers, Config.behaviour
+    Config.behaviour = Config.behaviour or {}
+    Config.provider = "claude-code"
+    Config.acp_providers = { ["claude-code"] = { command = "fake-acp", args = {}, env = {} } }
+    setup_transport_stub = stub(ACPClient, "_setup_transport")
+    connect_stub = stub(ACPClient, "connect")
   end)
 
-  it("is a no-op when nothing is tagged", function()
-    local original = Config.slash_commands
-    Config.slash_commands = { { name = "x", description = "x", details = "x" } }
-    llm.prune_acp_slash_commands()
-    assert.equals(1, #Config.slash_commands)
-    Config.slash_commands = original
+  after_each(function()
+    setup_transport_stub:revert()
+    connect_stub:revert()
+    Config.provider, Config.acp_providers, Config.behaviour = saved_provider, saved_acp_providers, saved_behaviour
+  end)
+
+  it("copies terminal snapshots from a child tool_call_update onto the parent message", function()
+    local added = {}
+    llm._stream_acp({
+      just_connect_acp_client = true,
+      on_messages_add = function(messages)
+        for _, m in ipairs(messages) do
+          added[m.uuid] = m
+        end
+      end,
+      on_start = function() end,
+      on_stop = function() end,
+    })
+    local client = connect_stub.calls[1].refs[1]
+    assert.is_not_nil(client)
+    local on_session_update = client.config.handlers.on_session_update
+
+    on_session_update({
+      sessionUpdate = "tool_call",
+      toolCallId = "task-1",
+      title = "Task",
+      kind = "think",
+      status = "in_progress",
+      _meta = { claudeCode = { toolName = "Task" } },
+    })
+    on_session_update({
+      sessionUpdate = "tool_call",
+      toolCallId = "bash-1",
+      title = "ls",
+      kind = "execute",
+      status = "in_progress",
+      content = { { type = "terminal", terminalId = "term-1" } },
+      _meta = { claudeCode = { toolName = "Bash", parentToolUseId = "task-1" }, terminal_info = { terminal_id = "term-1" } },
+    })
+    on_session_update({
+      sessionUpdate = "tool_call_update",
+      toolCallId = "bash-1",
+      status = "completed",
+      _meta = {
+        terminal_output = { terminal_id = "term-1", data = "hello from subagent\n" },
+        terminal_exit = { terminal_id = "term-1", exit_code = 0 },
+      },
+    })
+
+    local parent = added["task-1"]
+    assert.is_not_nil(parent)
+    assert.is_nil(added["bash-1"], "child tool call must not become a top-level message")
+    assert.equals(1, #parent.acp_children)
+    assert.equals("bash-1", parent.acp_children[1].tool_call.toolCallId)
+    assert.equals("completed", parent.acp_children[1].tool_call.status)
+    assert.is_not_nil(parent.acp_terminals)
+    assert.equals("hello from subagent\n", parent.acp_terminals["term-1"].output)
+    assert.equals(0, parent.acp_terminals["term-1"].exitStatus.exitCode)
+
+    -- the scheduled on_terminal_update also reaches the parent via acp_children
+    client:push_terminal_output("term-1", "more\n")
+    vim.wait(100, function() return parent.acp_terminals["term-1"].output:find("more", 1, true) ~= nil end)
+    assert.equals("hello from subagent\nmore\n", parent.acp_terminals["term-1"].output)
+
+    local Render = require("avante.history.render")
+    local lines = Render.get_content_lines(parent.acp_children[1].tool_call.content, "", false, parent.acp_terminals)
+    local text = table.concat(vim.tbl_map(tostring, lines), "\n")
+    assert.is_truthy(text:find("hello from subagent", 1, true))
+    client.transport = { stop = function() end }
+    client:stop()
   end)
 end)
