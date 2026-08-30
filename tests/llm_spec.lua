@@ -205,3 +205,189 @@ describe("generate_prompts", function()
     assert.are.same(1, instruction_message_count2)
   end)
 end)
+
+describe("ACP prompt parts", function()
+  local ACPClient = require("avante.libs.acp_client")
+  local stub = require("luassert.stub")
+  local Config = require("avante.config")
+  local tmp_dir = vim.fs.joinpath("tests", "/tmp/acp_prompt_parts")
+  local setup_transport_stub
+  local warn_stub
+  local warnings
+
+  ---@param caps table
+  local function make_client(caps)
+    local client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+    client.agent_capabilities = { loadSession = true, promptCapabilities = caps }
+    client.prompt_capabilities = caps
+    return client
+  end
+
+  local function write_file(name, content)
+    local path = vim.fs.joinpath(tmp_dir, name)
+    local file = assert(io.open(path, "wb"))
+    file:write(content)
+    file:close()
+    return vim.fn.fnamemodify(path, ":p")
+  end
+
+  before_each(function()
+    vim.fn.mkdir(tmp_dir, "p")
+    setup_transport_stub = stub(ACPClient, "_setup_transport")
+    warnings = {}
+    warn_stub = stub(utils, "warn")
+    warn_stub.invokes(function(msg) table.insert(warnings, msg) end)
+    Config.provider = "claude-code"
+    llm._acp_image_unsupported_warned = {}
+  end)
+
+  after_each(function()
+    setup_transport_stub:revert()
+    warn_stub:revert()
+    vim.fn.delete(tmp_dir, "rf")
+  end)
+
+  describe("extract_image_paths_from_text", function()
+    it("extracts image: lines produced by the paste template", function()
+      local text = "look at this\nimage: /tmp/a.png\nand this\nimage: /tmp/b.jpg\n"
+      assert.same({ "/tmp/a.png", "/tmp/b.jpg" }, llm.extract_image_paths_from_text(text))
+    end)
+
+    it("returns nothing when there is no image line", function()
+      assert.same({}, llm.extract_image_paths_from_text("just text"))
+    end)
+  end)
+
+  describe("build_acp_image_parts", function()
+    it("emits base64 image parts when the agent supports images", function()
+      local png = write_file("a.png", "\137PNG\r\n\26\n")
+      local client = make_client({ image = true, embeddedContext = true })
+      local opts = {
+        history_messages = { { message = { role = "user", content = "describe\nimage: " .. png } } },
+      }
+
+      local parts = llm.build_acp_image_parts(opts, client)
+
+      assert.equals(1, #parts)
+      assert.equals("image", parts[1].type)
+      assert.equals("image/png", parts[1].mimeType)
+      assert.equals(vim.base64.encode("\137PNG\r\n\26\n"), parts[1].data)
+      assert.equals("file://" .. png, parts[1].uri)
+      assert.same({}, warnings)
+    end)
+
+    it("uses prompt_opts.image_paths and detects jpeg mime type", function()
+      local jpg = write_file("b.jpg", "\255\216\255")
+      local client = make_client({ image = true })
+      local parts = llm.build_acp_image_parts({ prompt_opts = { image_paths = { jpg } } }, client)
+
+      assert.equals(1, #parts)
+      assert.equals("image/jpeg", parts[1].mimeType)
+      assert.equals(vim.base64.encode("\255\216\255"), parts[1].data)
+    end)
+
+    it("only reads images from the latest user message", function()
+      local png = write_file("c.png", "x")
+      local client = make_client({ image = true })
+      local opts = {
+        history_messages = {
+          { message = { role = "user", content = "image: /tmp/old.png" } },
+          { message = { role = "assistant", content = "ok" } },
+          { message = { role = "user", content = { { type = "text", text = "image: " .. png } } } },
+        },
+      }
+      local parts = llm.build_acp_image_parts(opts, client)
+      assert.equals(1, #parts)
+      assert.equals("file://" .. png, parts[1].uri)
+    end)
+
+    it("falls back to resource_link and warns once when the agent lacks image support", function()
+      local png = write_file("d.png", "x")
+      local client = make_client({ embeddedContext = true })
+      local opts = { prompt_opts = { image_paths = { png } } }
+
+      local parts = llm.build_acp_image_parts(opts, client)
+      llm.build_acp_image_parts(opts, client)
+
+      assert.equals(1, #parts)
+      assert.same(
+        { type = "resource_link", uri = "file://" .. png, name = "d.png", mimeType = "image/png" },
+        parts[1]
+      )
+      assert.equals(1, #warnings)
+      assert.truthy(warnings[1]:find("does not advertise image support", 1, true))
+    end)
+
+    it("returns no parts when no images are attached", function()
+      local client = make_client({ image = true })
+      assert.same({}, llm.build_acp_image_parts({ history_messages = {} }, client))
+    end)
+  end)
+
+  describe("build_acp_file_part", function()
+    it("embeds file content as a text resource when embeddedContext is supported", function()
+      local lua_file = write_file("mod.lua", "return 1\n")
+      local client = make_client({ image = true, embeddedContext = true })
+
+      local part = llm.build_acp_file_part(lua_file, client)
+
+      assert.same({
+        type = "resource",
+        resource = { uri = "file://" .. lua_file, text = "return 1\n", mimeType = "text/x-lua" },
+      }, part)
+    end)
+
+    it("uses resource_link when embeddedContext is not supported", function()
+      local lua_file = write_file("mod.lua", "return 1\n")
+      local client = make_client({ image = true })
+
+      local part = llm.build_acp_file_part(lua_file, client)
+
+      assert.same(
+        { type = "resource_link", uri = "file://" .. lua_file, name = "mod.lua", mimeType = "text/x-lua" },
+        part
+      )
+    end)
+
+    it("uses resource_link for files above the embedded size limit", function()
+      local big = write_file("big.txt", string.rep("a", llm.ACP_EMBEDDED_RESOURCE_MAX_BYTES + 1))
+      local client = make_client({ embeddedContext = true })
+
+      local part = llm.build_acp_file_part(big, client)
+
+      assert.equals("resource_link", part.type)
+      assert.equals("big.txt", part.name)
+    end)
+  end)
+
+  describe("_continue_stream_acp", function()
+    it("sends embedded files and images in the prompt request", function()
+      local png = write_file("shot.png", "img")
+      local lua_file = write_file("mod.lua", "return 1\n")
+      local client = make_client({ image = true, embeddedContext = true })
+      local sent_prompt
+      client.transport = {
+        send = function(_, data)
+          local decoded = vim.json.decode(data)
+          if decoded.method == "session/prompt" then sent_prompt = decoded.params.prompt end
+        end,
+        start = function() end,
+        stop = function() end,
+      }
+      client.state = "ready"
+
+      llm._continue_stream_acp({
+        selected_filepaths = { lua_file },
+        history_messages = { { message = { role = "user", content = "hi\nimage: " .. png } } },
+        on_start = function() end,
+        on_stop = function() end,
+      }, client, "session-1")
+
+      assert.is_not_nil(sent_prompt)
+      local types = vim.tbl_map(function(p) return p.type end, sent_prompt)
+      assert.same({ "resource", "text", "image" }, types)
+      assert.equals("return 1\n", sent_prompt[1].resource.text)
+      assert.equals(vim.base64.encode("img"), sent_prompt[3].data)
+    end)
+  end)
+end)
