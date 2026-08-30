@@ -35,14 +35,24 @@ function CommandsSource:complete(params, callback)
   local items = {}
 
   for _, command in ipairs(commands) do
-    table.insert(items, {
-      label = "/" .. command.name,
+    local label = "/" .. command.name
+    local item = {
+      label = label,
       kind = kind,
       detail = command.details,
       data = {
         name = command.name,
       },
-    })
+    }
+    if command.hint then
+      item.labelDetails = { detail = " " .. command.hint }
+      item.insertText = label .. " "
+      item.documentation = {
+        kind = "markdown",
+        value = string.format("%s\n\n`%s %s`", command.description or "", label, command.hint),
+      }
+    end
+    table.insert(items, item)
   end
 
   callback({
@@ -62,8 +72,10 @@ function CommandsSource:execute(item, callback)
   end
 
   local sidebar = require("avante").get()
-  if not command.callback then
-    if sidebar then sidebar:submit_input() end
+  if not command.callback or require("avante.slashcommands").is_acp_command(command) then
+    -- Agent commands are submitted as raw text; when the command expects
+    -- arguments leave the input open so the user can type them.
+    if sidebar and not command.hint then sidebar:submit_input() end
     callback()
     return
   end
