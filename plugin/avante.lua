@@ -226,6 +226,10 @@ api.nvim_create_user_command("AvanteACPModes", function() require("avante.api").
   desc = "avante: switch ACP mode",
   nargs = 0,
 })
+api.nvim_create_user_command("AvanteACPSessions", function() require("avante.api").select_acp_session() end, {
+  desc = "avante: browse Claude Code sessions for this project and load one",
+  nargs = 0,
+})
 api.nvim_create_user_command("AvanteHistory", function() require("avante.api").select_history() end, {
   desc = "avante: show histories",
   nargs = 0,

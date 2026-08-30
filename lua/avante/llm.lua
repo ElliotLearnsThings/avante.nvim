@@ -915,6 +915,15 @@ local function truncate_history_for_recovery(history_messages)
 
   return truncated
 end
+-- session/update kinds that session/load replays from the transcript
+local REPLAYED_UPDATE_KINDS = {
+  user_message_chunk = true,
+  agent_message_chunk = true,
+  agent_thought_chunk = true,
+  tool_call = true,
+  tool_call_update = true,
+}
+
 ---@param opts AvanteLLMStreamOptions
 function M._stream_acp(opts)
   Utils.debug("use ACP", Config.provider)
@@ -982,6 +991,7 @@ function M._stream_acp(opts)
     return message
   end
   local acp_client = opts.acp_client
+  if opts.acp_session_id == "" then opts.acp_session_id = nil end
   local session_id = opts.acp_session_id
   local acp_client_config = acp_client and acp_client.config
   local is_same_acp_command_invocation = acp_client_config
@@ -1061,6 +1071,33 @@ function M._stream_acp(opts)
           if #messages > 0 then on_messages_add(messages) end
         end,
         on_session_update = function(update)
+          -- While session/load replays the transcript, the agent re-sends every
+          -- message/tool call as session/update notifications. If the avante
+          -- history already contains those messages (a persisted chat being
+          -- re-attached to its ACP session) they must not be appended again.
+          local replay = rawget(opts, "_acp_replay")
+          if replay and replay.skip and REPLAYED_UPDATE_KINDS[update.sessionUpdate] then return end
+
+          if update.sessionUpdate == "user_message_chunk" then
+            -- Outside of replay the user's own submission is already in the
+            -- history, so echoed user chunks are ignored.
+            if not replay or update.content.type ~= "text" then return end
+            local messages = get_history_messages()
+            local last_message = messages[#messages]
+            if last_message and last_message.message.role == "user" and last_message.is_user_submission then
+              local content = last_message.message.content
+              if type(content) == "string" then
+                last_message.message.content = content .. update.content.text
+                on_messages_add({ last_message })
+                return
+              end
+            end
+            local message = History.Message:new("user", update.content.text, { is_user_submission = true })
+            message.state = "generated"
+            on_messages_add({ message })
+            return
+          end
+
           if update.sessionUpdate == "plan" then
             local todos = {}
             for idx, entry in ipairs(update.entries) do
@@ -1407,7 +1444,15 @@ function M._stream_acp(opts)
 
       -- If we create a new client and it does not support sesion loading,
       -- remove the old session
-      if not acp_client.agent_capabilities.loadSession then opts.acp_session_id = nil end
+      if not acp_client:supports_load_session() and opts.acp_session_id then
+        Utils.warn(
+          "ACP agent '"
+            .. tostring(Config.provider)
+            .. "' does not support session/load; starting a new session instead of resuming "
+            .. tostring(opts.acp_session_id)
+        )
+        opts.acp_session_id = nil
+      end
       if opts.on_save_acp_client then opts.on_save_acp_client(acp_client) end
 
       session_id = opts.acp_session_id
@@ -1420,6 +1465,11 @@ function M._stream_acp(opts)
     return
   elseif not session_id then
     M._create_acp_session_and_continue(opts, acp_client)
+    return
+  elseif not acp_client:is_session_active(session_id) then
+    -- A persisted session id (e.g. after switching histories or picking a
+    -- Claude Code CLI session) that this agent process has not seen yet.
+    M._load_acp_session_and_continue(opts, acp_client, session_id)
     return
   end
 
@@ -1546,15 +1596,25 @@ function M._load_acp_session_and_continue(opts, acp_client, session_id)
   local project_root = Utils.root.get()
   local acp_provider = Config.acp_providers[Config.provider] or {}
   local mcp_servers = M._resolve_acp_mcp_servers(acp_provider)
+  local existing_messages = opts.get_history_messages and opts.get_history_messages() or {}
+  -- Replayed updates are only materialised into the history when it is empty
+  -- (fresh history attached to an existing agent session); otherwise they are
+  -- dropped because the history already holds the transcript.
+  rawset(opts, "_acp_replay", { skip = #existing_messages > 0 })
   acp_client:load_session(session_id, project_root, mcp_servers, function(_, err)
+    -- session/update notifications are dispatched through vim.schedule, so the
+    -- replay window must be closed from the scheduler as well to stay ordered.
+    vim.schedule(function() rawset(opts, "_acp_replay", nil) end)
     if err then
       -- Failed to load session, create a new one. It happens after switching acp providers
+      Utils.warn("Failed to load ACP session " .. session_id .. ": " .. tostring(err.message) .. "; creating a new one")
+      if opts.on_save_acp_session_id then opts.on_save_acp_session_id("") end
       M._create_acp_session_and_continue(opts, acp_client)
       return
     end
 
     if opts.just_connect_acp_client then return end
-    M._continue_stream_acp(opts, acp_client, session_id)
+    vim.schedule(function() M._continue_stream_acp(opts, acp_client, session_id) end)
   end)
 end
 

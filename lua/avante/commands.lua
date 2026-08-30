@@ -23,6 +23,11 @@
 --- :AvanteHistory
 ---         Open a picker for previous chat sessions.
 ---
+---                                                     *:AvanteACPSessions*
+--- :AvanteACPSessions
+---         Browse Claude Code CLI sessions for the current project and load
+---         one into a new chat via ACP session/load.
+---
 ---                                                     *:AvanteClear*
 --- :AvanteClear [history|cache]
 ---         Clear the current chat history or Avante cache.

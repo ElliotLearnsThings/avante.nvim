@@ -748,6 +748,13 @@ Commands (:AvanteAsk,...)                                      *avante-commands*
  :AvanteACPModes
          Switch ACP mode.
 
+                                                     *:AvanteACPSessions*
+ :AvanteACPSessions
+         Browse Claude Code CLI sessions recorded for the current project
+         (`~/.claude/projects/<encoded cwd>/*.jsonl`) and load one into a new
+         chat via ACP `session/load`. The agent must advertise the
+         `loadSession` capability. Default mapping: `<leader>aH`.
+
 
 ==============================================================================
 Sidebar                                                         *avante-sidebar*
