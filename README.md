@@ -1222,6 +1222,45 @@ acp_providers = {
 
 Once a session is running you can switch the agent's permission mode with `<leader>am` (`:AvanteACPModes`) and its model with `<leader>aM` (`:AvanteACPModels`). Set `behaviour.acp_follow_agent_locations = false` if you do not want avante to open files and jump to the lines the agent is editing.
 
+### MCP servers for ACP agents
+
+ACP agents can be given [MCP](https://modelcontextprotocol.io) servers through the `mcp_servers` field of an ACP provider. Avante forwards them as `mcpServers` on both `session/new` and `session/load`, so they are available in fresh and resumed sessions. Two forms are accepted:
+
+```lua
+acp_providers = {
+  ["claude-code"] = {
+    command = "claude-agent-acp",
+    -- Friendly keyed form: `env` / `headers` are plain `{ KEY = "VAL" }` tables
+    mcp_servers = {
+      filesystem = {
+        command = "npx",
+        args = { "-y", "@modelcontextprotocol/server-filesystem", vim.fn.getcwd() },
+        env = { LOG_LEVEL = "info" },
+      },
+      docs = { type = "http", url = "http://localhost:8080/mcp", headers = { Authorization = "Bearer ..." } },
+    },
+  },
+  ["gemini-cli"] = {
+    command = "gemini",
+    args = { "--experimental-acp" },
+    -- Raw ACP list form, exactly as described in
+    -- https://agentclientprotocol.com/protocol/session-setup
+    mcp_servers = {
+      { name = "filesystem", command = "npx", args = { "-y", "@modelcontextprotocol/server-filesystem", "." }, env = { { name = "LOG_LEVEL", value = "info" } } },
+      { type = "sse", name = "docs", url = "http://localhost:8080/sse", headers = {} },
+    },
+  },
+},
+```
+
+Entries with `disabled = true` are skipped. If you already manage MCP servers with [mcphub.nvim](https://github.com/ravitemer/mcphub.nvim), set `use_mcphub = true` on the provider and Avante will merge mcphub's configured **stdio** servers (from the hub instance or `~/.config/mcphub/servers.json`, skipping disabled ones) into `mcp_servers`. Servers declared directly in `mcp_servers` win on name conflicts. The bridge is a no-op when mcphub.nvim is not installed.
+
+```lua
+acp_providers = {
+  ["claude-code"] = { command = "claude-agent-acp", use_mcphub = true },
+},
+```
+
 ## RAG Service
 
 Avante provides a RAG service, which is a tool for obtaining the required context for the AI to generate the codes. By default, it is not enabled. You can enable it this way:

@@ -370,4 +370,78 @@ describe("ACPClient", function()
       assert.same({}, sent_params.mcpServers)
     end)
   end)
+
+  describe("normalize_mcp_servers", function()
+    it("returns an empty list for nil or empty input", function()
+      assert.same({}, ACPClient.normalize_mcp_servers(nil))
+      assert.same({}, ACPClient.normalize_mcp_servers({}))
+      assert.same({}, ACPClient.normalize_mcp_servers("nope"))
+    end)
+
+    it("converts keyed table form into the ACP list form", function()
+      local result = ACPClient.normalize_mcp_servers({
+        filesystem = {
+          command = "npx",
+          args = { "-y", "@modelcontextprotocol/server-filesystem", "/tmp" },
+          env = { FOO = "bar" },
+        },
+        remote = { type = "http", url = "http://localhost:8080/mcp", headers = { Authorization = "Bearer x" } },
+      })
+      assert.same({
+        {
+          name = "filesystem",
+          command = "npx",
+          args = { "-y", "@modelcontextprotocol/server-filesystem", "/tmp" },
+          env = { { name = "FOO", value = "bar" } },
+        },
+        {
+          type = "http",
+          name = "remote",
+          url = "http://localhost:8080/mcp",
+          headers = { { name = "Authorization", value = "Bearer x" } },
+        },
+      }, result)
+    end)
+
+    it("sorts keyed env vars by name for deterministic output", function()
+      local result = ACPClient.normalize_mcp_servers({
+        srv = { command = "x", env = { ZED = "1", ALPHA = "2", MID = "3" } },
+      })
+      assert.same({
+        { name = "ALPHA", value = "2" },
+        { name = "MID", value = "3" },
+        { name = "ZED", value = "1" },
+      }, result[1].env)
+    end)
+
+    it("passes raw ACP list form through and normalizes env tables inside it", function()
+      local raw = {
+        { name = "lookup", type = "http", url = "http://localhost:8080/mcp" },
+        { name = "local", command = "srv", args = { "--flag" }, env = { { name = "A", value = "1" } } },
+        { name = "keyed_env", command = "srv2", env = { B = "2" } },
+      }
+      local result = ACPClient.normalize_mcp_servers(raw)
+      assert.same({
+        { type = "http", name = "lookup", url = "http://localhost:8080/mcp", headers = {} },
+        { name = "local", command = "srv", args = { "--flag" }, env = { { name = "A", value = "1" } } },
+        { name = "keyed_env", command = "srv2", args = {}, env = { { name = "B", value = "2" } } },
+      }, result)
+    end)
+
+    it("drops disabled servers and entries without command/url", function()
+      local result = ACPClient.normalize_mcp_servers({
+        off = { command = "x", disabled = true },
+        off2 = { command = "x", enabled = false },
+        nocmd = { args = { "a" } },
+        nourl = { type = "sse" },
+        ok = { command = "x" },
+      })
+      assert.same({ { name = "ok", command = "x", args = {}, env = {} } }, result)
+    end)
+
+    it("infers http type when only a url is given", function()
+      local result = ACPClient.normalize_mcp_servers({ remote = { url = "http://h/mcp" } })
+      assert.same({ { type = "http", name = "remote", url = "http://h/mcp", headers = {} } }, result)
+    end)
+  end)
 end)
