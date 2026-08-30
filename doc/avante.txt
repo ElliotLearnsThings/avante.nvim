@@ -2638,6 +2638,59 @@ ACP providers offer several advantages over traditional API-based providers:
 - **Fine-grained Permissions**: Control exactly what agents can access and modify
 - **Standardized Protocol**: Compatible with any ACP-compliant agent
 
+MCP servers                                             *avante-acp-mcp-servers*
+
+ACP agents can be given MCP servers through the `mcp_servers` field of an ACP
+provider. Avante forwards them as `mcpServers` on both `session/new` and
+`session/load`. Two forms are accepted: a friendly keyed table where `env` and
+`headers` are plain `{ KEY = "VAL" }` tables, or the raw ACP list form from
+https://agentclientprotocol.com/protocol/session-setup.
+
+>lua
+   acp_providers = {
+     ["claude-code"] = {
+       command = "claude-agent-acp",
+       mcp_servers = {
+         filesystem = {
+           command = "npx",
+           args = { "-y", "@modelcontextprotocol/server-filesystem", "." },
+           env = { LOG_LEVEL = "info" },
+         },
+         docs = { type = "http", url = "http://localhost:8080/mcp" },
+       },
+     },
+     ["gemini-cli"] = {
+       command = "gemini",
+       args = { "--experimental-acp" },
+       mcp_servers = {
+         {
+           name = "filesystem",
+           command = "npx",
+           args = { "-y", "@modelcontextprotocol/server-filesystem", "." },
+           env = { { name = "LOG_LEVEL", value = "info" } },
+         },
+       },
+     },
+   }
+<
+
+Entries with `disabled = true` are skipped.
+
+mcphub.nvim bridge                                          *avante-acp-mcphub*
+
+Set `use_mcphub = true` on an ACP provider to merge the stdio MCP servers
+configured in mcphub.nvim (https://github.com/ravitemer/mcphub.nvim) into
+`mcp_servers`. Servers are read from the running hub instance or from
+`~/.config/mcphub/servers.json`; disabled and non-stdio servers are skipped,
+and servers declared directly in `mcp_servers` win on name conflicts. The
+bridge is a no-op when mcphub.nvim is not installed.
+
+>lua
+   acp_providers = {
+     ["claude-code"] = { command = "claude-agent-acp", use_mcphub = true },
+   }
+<
+
 avante.acp.ClientCapabilities                    *avante.acp.ClientCapabilities*
 
     Fields: ~

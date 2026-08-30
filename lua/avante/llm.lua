@@ -1364,12 +1364,101 @@ function M._stream_acp(opts)
   M._continue_stream_acp(opts, acp_client, session_id)
 end
 
+---Read stdio MCP servers configured in mcphub.nvim (if installed) and return
+---them in the friendly keyed form. Disabled servers and non-stdio servers are
+---skipped. Everything is guarded with pcall so a missing or broken mcphub never
+---breaks ACP session creation.
+---@return table<string, avante.acp.MCPServerSpec>
+function M._get_mcphub_mcp_servers()
+  local servers = {}
+  local ok_mod, mcphub = pcall(require, "mcphub")
+  if not ok_mod or type(mcphub) ~= "table" then return servers end
+
+  local config_path = vim.fn.expand("~/.config/mcphub/servers.json")
+  local config_servers = nil
+
+  local ok_hub, hub = pcall(function()
+    if type(mcphub.get_hub_instance) ~= "function" then return nil end
+    return mcphub.get_hub_instance()
+  end)
+  if ok_hub and type(hub) == "table" then
+    local hub_config = hub.config
+    if type(hub_config) == "table" then
+      if type(hub_config.config) == "string" and hub_config.config ~= "" then
+        config_path = vim.fn.expand(hub_config.config)
+      end
+      if type(hub_config.mcpServers) == "table" then config_servers = hub_config.mcpServers end
+    end
+  end
+
+  if config_servers == nil then
+    local ok_read, content = pcall(function() return table.concat(vim.fn.readfile(config_path), "\n") end)
+    if not ok_read or type(content) ~= "string" or content == "" then return servers end
+    local ok_json, decoded = pcall(vim.json.decode, content)
+    if not ok_json or type(decoded) ~= "table" or type(decoded.mcpServers) ~= "table" then return servers end
+    config_servers = decoded.mcpServers
+  end
+
+  for name, spec in pairs(config_servers) do
+    if
+      type(name) == "string"
+      and type(spec) == "table"
+      and spec.disabled ~= true
+      and type(spec.command) == "string"
+      and spec.command ~= ""
+    then
+      local env = {}
+      if type(spec.env) == "table" and not vim.islist(spec.env) then
+        for key, value in pairs(spec.env) do
+          -- mcphub treats "" / null as "inherit from the current environment"
+          if value == vim.NIL or value == nil or value == "" then value = os.getenv(key) end
+          if type(value) == "string" or type(value) == "number" then env[key] = tostring(value) end
+        end
+      end
+      servers[name] = {
+        command = spec.command,
+        args = type(spec.args) == "table" and spec.args or {},
+        env = env,
+      }
+    end
+  end
+  return servers
+end
+
+---Resolve the `mcpServers` list to send to the ACP agent for the current
+---provider: normalizes `acp_provider.mcp_servers` (raw list or keyed table) and,
+---when `use_mcphub = true`, merges in stdio servers from mcphub.nvim.
+---Explicitly configured servers take precedence over mcphub ones.
+---@param acp_provider AvanteACPProvider|nil
+---@return avante.acp.MCPServer[]
+function M._resolve_acp_mcp_servers(acp_provider)
+  acp_provider = acp_provider or {}
+  local ACPClient = require("avante.libs.acp_client")
+  local servers = ACPClient.normalize_mcp_servers(acp_provider.mcp_servers)
+  if acp_provider.use_mcphub ~= true then return servers end
+
+  local ok, hub_servers = pcall(M._get_mcphub_mcp_servers)
+  if not ok or type(hub_servers) ~= "table" then return servers end
+
+  local seen = {}
+  for _, server in ipairs(servers) do
+    seen[server.name] = true
+  end
+  for _, server in ipairs(ACPClient.normalize_mcp_servers(hub_servers)) do
+    if not seen[server.name] then
+      seen[server.name] = true
+      table.insert(servers, server)
+    end
+  end
+  return servers
+end
+
 ---@param opts AvanteLLMStreamOptions
 ---@param acp_client avante.acp.ACPClient
 function M._create_acp_session_and_continue(opts, acp_client)
   local project_root = Utils.root.get()
   local acp_provider = Config.acp_providers[Config.provider] or {}
-  local mcp_servers = acp_provider.mcp_servers or {}
+  local mcp_servers = M._resolve_acp_mcp_servers(acp_provider)
   acp_client:create_session(project_root, mcp_servers, function(session_id_, err)
     if err then
       opts.on_stop({ reason = "error", error = err })
@@ -1392,7 +1481,9 @@ end
 ---@param session_id string
 function M._load_acp_session_and_continue(opts, acp_client, session_id)
   local project_root = Utils.root.get()
-  acp_client:load_session(session_id, project_root, {}, function(_, err)
+  local acp_provider = Config.acp_providers[Config.provider] or {}
+  local mcp_servers = M._resolve_acp_mcp_servers(acp_provider)
+  acp_client:load_session(session_id, project_root, mcp_servers, function(_, err)
     if err then
       -- Failed to load session, create a new one. It happens after switching acp providers
       M._create_acp_session_and_continue(opts, acp_client)

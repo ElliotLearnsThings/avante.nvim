@@ -385,11 +385,36 @@ vim.g.avante_login = vim.g.avante_login
 ---@field is_temperature_unsupported fun(string): boolean
 ---@field transform_anthropic_usage any
 ---
+---@class avante.acp.MCPEnvVar
+---@field name string
+---@field value string
+---
+---@class avante.acp.MCPServer
+---@field name string
+---@field type? "http" | "sse"  Omitted for stdio servers
+---@field command? string  stdio: executable to spawn
+---@field args? string[]  stdio: arguments
+---@field env? avante.acp.MCPEnvVar[]  stdio: environment variables
+---@field url? string  http/sse: endpoint
+---@field headers? avante.acp.MCPEnvVar[]  http/sse: HTTP headers
+---
+---Friendly keyed form of an MCP server; `env`/`headers` may be plain `{ KEY = "VAL" }` tables.
+---@class avante.acp.MCPServerSpec
+---@field type? "http" | "sse"
+---@field command? string
+---@field args? string[]
+---@field env? table<string, string> | avante.acp.MCPEnvVar[]
+---@field url? string
+---@field headers? table<string, string> | avante.acp.MCPEnvVar[]
+---@field disabled? boolean
+---
 ---@class AvanteACPProvider
 ---@field command string
 ---@field args string[]
 ---@field env table<string, string>
 ---@field auth_method string
+---@field mcp_servers? avante.acp.MCPServer[] | table<string, avante.acp.MCPServerSpec>  MCP servers forwarded to the agent on `session/new` and `session/load`
+---@field use_mcphub? boolean  Merge stdio servers configured in mcphub.nvim into `mcp_servers`
 ---
 ---@alias AvanteLlmMode avante.Mode | "editing" | "suggesting"
 ---
