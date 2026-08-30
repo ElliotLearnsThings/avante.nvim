@@ -25,6 +25,17 @@
 ---- **For Gemini CLI**: Install the `gemini` CLI tool and set your `GEMINI_API_KEY`
 ---- **For Claude Code**: Install the `acp-claude-code` package via npm and set your `ANTHROPIC_API_KEY`
 ---
+---Permission mode (Claude Code)
+---
+---The `claude-code` ACP provider passes `ACP_PERMISSION_MODE` in the agent environment. Accepted values
+---(case-insensitive) are `default`, `acceptEdits`, `dontAsk`, `plan` and `bypassPermissions` (alias `bypass`;
+---a locally patched `claude-agent-acp` also accepts `auto`). Avante defaults to `default` so that the agent
+---sends `session/request_permission` for tool calls and the inline permission buttons are shown when
+---`behaviour.auto_approve_tool_permissions` is `false`. Note: current `@zed-industries/claude-agent-acp`
+---releases resolve the initial mode from Claude Code's own settings (`permissions.defaultMode` in
+---`~/.claude/settings.json`); the env var is honoured by `acp-claude-code`-style adapters. With
+---`bypassPermissions` the agent never asks for permission, so avante's permission prompts never appear.
+---
 ---ACP vs Traditional Providers
 ---
 ---ACP providers offer several advantages over traditional API-based providers:
@@ -247,6 +258,8 @@ local Utils = require("avante.utils")
 ---@field _legacy_api boolean|nil Whether agent uses old modes/models API instead of configOptions
 ---@field config ACPConfig
 ---@field callbacks table<number, fun(result: table|nil, err: avante.acp.ACPError|nil)>
+---@field pending_permissions table<number, boolean> ids of unanswered session/request_permission requests
+---@field stderr_lines string[] last lines received on the agent's stderr
 ---@field debug_log_file file*|nil
 local ACPClient = {}
 
@@ -261,7 +274,13 @@ ACPClient.ERROR_CODES = {
   -- ACP
   AUTH_REQUIRED = -32000,
   RESOURCE_NOT_FOUND = -32002,
+  -- Client-side (implementation defined, -32000..-32099 range)
+  PROTOCOL_ERROR = -32010,
+  TIMEOUT_ERROR = -32011,
 }
+
+-- Number of trailing stderr lines kept for error diagnostics
+ACPClient.STDERR_TAIL_LINES = 20
 
 local LOG_SEPARATOR = string.rep("=", 80) .. "\n"
 
@@ -302,6 +321,8 @@ function ACPClient:new(config)
     },
     debug_log_file = nil,
     callbacks = {},
+    pending_permissions = {},
+    stderr_lines = {},
     transport = nil,
     config = config or {},
     config_options = nil,
@@ -378,6 +399,42 @@ function ACPClient:_create_error(code, message, data)
   }
 end
 
+---Record agent stderr output (tail buffer + debug log)
+---@param data string
+function ACPClient:_record_stderr(data)
+  for _, line in ipairs(vim.split(data, "\n", { plain = true, trimempty = true })) do
+    table.insert(self.stderr_lines, line)
+    while #self.stderr_lines > ACPClient.STDERR_TAIL_LINES do
+      table.remove(self.stderr_lines, 1)
+    end
+  end
+  vim.schedule(function()
+    Utils.debug("ACP stderr:", data)
+    self:_debug_log("stderr: " .. data .. (data:sub(-1) == "\n" and "" or "\n"))
+  end)
+end
+
+---Build a human readable message for an agent process that died before becoming ready
+---@param code integer
+---@param signal integer
+---@return string
+function ACPClient:_format_spawn_failure(code, signal)
+  local cmd = table.concat({ self.config.command or "?", unpack(self.config.args or {}) }, " ")
+  local msg = string.format("ACP agent [%s] exited with code %d (signal %d) before becoming ready", cmd, code, signal)
+  if #self.stderr_lines > 0 then msg = msg .. "\nstderr:\n" .. table.concat(self.stderr_lines, "\n") end
+  return msg
+end
+
+---Fail every outstanding request callback with the given error
+---@param err avante.acp.ACPError
+function ACPClient:_fail_pending_callbacks(err)
+  local callbacks = self.callbacks
+  self.callbacks = {}
+  for _, callback in pairs(callbacks) do
+    pcall(callback, nil, err)
+  end
+end
+
 ---Create stdio transport layer
 function ACPClient:_create_stdio_transport()
   local uv = vim.uv or vim.loop
@@ -438,7 +495,20 @@ function ACPClient:_create_stdio_transport()
       stdio = { stdin, stdout, stderr },
     }, function(code, signal)
       Utils.debug("ACP agent exited with code " .. code .. " and signal " .. signal)
+      local was_ready = self.state == "ready"
       self:_set_state("disconnected")
+
+      if code ~= 0 and not was_ready then
+        local err = self:_create_error(
+          self.ERROR_CODES.PROTOCOL_ERROR,
+          self:_format_spawn_failure(code, signal),
+          { code = code, signal = signal, stderr = vim.deepcopy(self.stderr_lines) }
+        )
+        vim.schedule(function()
+          vim.notify(err.message, vim.log.levels.ERROR, { title = "Avante ACP" })
+          self:_fail_pending_callbacks(err)
+        end)
+      end
 
       if transport_self.process then
         transport_self.process:close()
@@ -499,14 +569,9 @@ function ACPClient:_create_stdio_transport()
       end
     end)
 
-    -- Read stderr for debugging
+    -- Read stderr: keep a tail for diagnostics and write it to the debug log
     stderr:read_start(function(_, data)
-      -- if data then
-      --   -- Filter out common session recovery error messages to avoid user confusion
-      --   if not (data:match("Session not found") or data:match("session/prompt")) then
-      --     vim.schedule(function() vim.notify("ACP stderr: " .. data, vim.log.levels.DEBUG) end)
-      --   end
-      -- end
+      if data then self:_record_stderr(data) end
     end)
   end
 
@@ -698,11 +763,19 @@ function ACPClient:_handle_request_permission(message_id, params)
   if not session_id or not tool_call then return end
 
   if self.config.handlers and self.config.handlers.on_request_permission then
+    self.pending_permissions[message_id] = true
     vim.schedule(function()
       self.config.handlers.on_request_permission(
         tool_call,
         options,
         function(option_id)
+          -- Ignore late answers for requests already resolved (e.g. by session/cancel)
+          if not self.pending_permissions[message_id] then return end
+          self.pending_permissions[message_id] = nil
+          if option_id == nil then
+            self:_send_result(message_id, { outcome = { outcome = "cancelled" } })
+            return
+          end
           self:_send_result(message_id, {
             outcome = {
               outcome = "selected",
@@ -713,6 +786,18 @@ function ACPClient:_handle_request_permission(message_id, params)
       )
     end)
   end
+end
+
+---Answer every unanswered session/request_permission with `outcome = "cancelled"`
+---@return integer count number of requests cancelled
+function ACPClient:_cancel_pending_permissions()
+  local ids = vim.tbl_keys(self.pending_permissions)
+  table.sort(ids)
+  self.pending_permissions = {}
+  for _, id in ipairs(ids) do
+    self:_send_result(id, { outcome = { outcome = "cancelled" } })
+  end
+  return #ids
 end
 
 ---Handle fs/read_text_file requests
@@ -785,6 +870,7 @@ end
 
 ---Stop client
 function ACPClient:stop()
+  self.pending_permissions = {}
   self.transport:stop()
   self:_close_debug_log()
   self.reconnect_count = 0
@@ -1059,6 +1145,9 @@ end
 ---Cancel session
 ---@param session_id string
 function ACPClient:cancel_session(session_id)
+  -- Per spec, in-flight permission requests must be resolved with "cancelled"
+  -- when the turn is cancelled.
+  self:_cancel_pending_permissions()
   self:_send_notification("session/cancel", {
     sessionId = session_id,
   })

@@ -316,6 +316,7 @@ vim.g.avante_login = vim.g.avante_login
 ---
 ---@class AvanteLLMStopCallbackOptions
 ---@field reason "complete" | "tool_use" | "error" | "rate_limit" | "cancelled" | "max_tokens" | "usage"
+---@field acp_stop_reason? ACPStopReason|string stopReason returned by an ACP session/prompt (ACP providers only)
 ---@field error? string | table
 ---@field usage? avante.LLMTokenUsage
 ---@field retry_after? integer
@@ -558,6 +559,7 @@ vim.g.avante_login = vim.g.avante_login
 ---@field details string
 ---@field shorthelp? string
 ---@field callback? AvanteSlashCommandCallback
+---@field source? "acp" | string origin of a dynamically registered command (ACP agents set "acp")
 
 ---@alias AvanteMentions "codebase" | "diagnostics" | "file" | "quickfix" | "buffers"
 ---@alias AvanteMentionCallback fun(args: string, cb?: fun(args: string): nil): nil
