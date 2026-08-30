@@ -1,3 +1,3 @@
 vim.g.avante = {
-  log_level = vim.log_level.DEBUG,
+  log_level = vim.log.levels.DEBUG,
 }

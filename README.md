@@ -40,7 +40,7 @@ If you like this project, please consider supporting me on Patreon, as it helps 
 
 It is possible to launch avante such that it looks like a typical Vibe Coding Agent CLI but while being completely Neovim underneath. So you can use your muscle-memory Vim operations and those rich and mature Neovim plugins on it. At the same time, by leveraging [ACP](https://github.com/yetone/avante.nvim#acp-support) it has all capabilities of claude code / gemini-cli / codex! Why not enjoy both?
 
-Now all you need to do is install [./contrib/avante] in your PATH (or create the equivalent alias); then every time you simply type avante just like using claude code and enter Avante’s Zen Mode!
+Now all you need to do is put [`contrib/avante`](./contrib/avante) in your PATH (or create the equivalent alias); then every time you simply type avante just like using claude code and enter Avante’s Zen Mode!
 
 The effect is as follows:
 
@@ -1195,6 +1195,32 @@ Avante.nvim now supports the [Agent Client Protocol (ACP)](https://agentclientpr
 
 Avante provides a set of default providers (codex, gemini, claude-code,...), but users can also create their own providers. Providers are configured in the `acp_providers` section of your configuration:
 See `:h avante-acp` and [Custom Providers](https://github.com/yetone/avante.nvim/wiki/Custom-providers) for more information.
+
+### Quick start: Claude Code over ACP
+
+1. Install the Claude Code CLI (`npm i -g @anthropic-ai/claude-code`) and log in once with `claude auth login` (or just run `claude` and follow the prompts).
+2. Install the ACP shim: `npm i -g @zed-industries/claude-agent-acp` (this provides the `claude-agent-acp` command that avante launches).
+3. Set `provider = "claude-code"` in your avante config.
+
+No `ANTHROPIC_API_KEY` is needed when the CLI is logged in: avante only forwards `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` to the shim if they are set in your environment, otherwise the CLI's own login is used.
+
+The default `acp_providers["claude-code"]` entry sets `ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE = vim.fn.exepath("claude")` and `ACP_PERMISSION_MODE = "bypassPermissions"`. Recent versions of the shim (0.23.x) no longer read these two variables; instead they honour:
+
+- `CLAUDE_CODE_EXECUTABLE`: absolute path of the `claude` binary to run (defaults to the CLI bundled with the shim's Claude Agent SDK).
+- `permissions.defaultMode` in your Claude settings (`~/.claude/settings.json`, `<cwd>/.claude/settings.json` or `.claude/settings.local.json`): the initial permission mode. Accepted values are `default`, `acceptEdits`, `dontAsk`, `plan` and `bypassPermissions` (alias `bypass`; not available when running as root unless `IS_SANDBOX` is set).
+- `CLAUDE_CONFIG_DIR`: alternative Claude config directory, `MAX_THINKING_TOKENS`: thinking-token budget.
+
+Any of these can be set via the `env` table of the provider, e.g.:
+
+```lua
+acp_providers = {
+  ["claude-code"] = {
+    env = { CLAUDE_CODE_EXECUTABLE = vim.fn.exepath("claude") },
+  },
+},
+```
+
+Once a session is running you can switch the agent's permission mode with `<leader>am` (`:AvanteACPModes`) and its model with `<leader>aM` (`:AvanteACPModels`). Set `behaviour.acp_follow_agent_locations = false` if you do not want avante to open files and jump to the lines the agent is editing.
 
 ## RAG Service
 
