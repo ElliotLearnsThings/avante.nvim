@@ -36,14 +36,27 @@ function M.confirm_inline(callback, confirm_opts)
     ACPConfirmAdapter.generate_buttons_for_acp_options(confirm_opts.permission_options or default_permission_options)
 
   sidebar.permission_button_options = items
+  -- Anchor the buttons to the tool call being confirmed; with several tool
+  -- calls in flight the buttons would otherwise show up under all of them.
+  sidebar.permission_message_uuid = confirm_opts.message_uuid
   sidebar.permission_handler = function(id)
+    M.clear_inline_confirm(sidebar)
     callback(id)
     sidebar.scroll = true
-    sidebar.permission_button_options = nil
-    sidebar.permission_handler = nil
-    sidebar._history_cache_invalidated = true
     sidebar:update_content("")
   end
+end
+
+---Remove the inline permission buttons without answering them (the request
+---was resolved elsewhere, e.g. cancelled).
+---@param sidebar? avante.Sidebar
+function M.clear_inline_confirm(sidebar)
+  sidebar = sidebar or require("avante").get()
+  if not sidebar then return end
+  sidebar.permission_button_options = nil
+  sidebar.permission_handler = nil
+  sidebar.permission_message_uuid = nil
+  sidebar._history_cache_invalidated = true
 end
 
 ---@param message string

@@ -922,6 +922,213 @@ local REPLAYED_UPDATE_KINDS = {
   tool_call_update = true,
 }
 
+---Canonical form of a path for comparisons: absolute, symlinks resolved when
+---the file exists (macOS `/var` vs `/private/var`, Neovim stores the latter).
+---@param path string
+---@return string
+local function canonical_path(path)
+  local abs = Utils.abspath(path)
+  return vim.uv.fs_realpath(abs) or abs
+end
+
+---Find the loaded, regular-file buffer that holds `abs_path`.
+---@param abs_path string
+---@return integer|nil bufnr
+local function find_loaded_file_buffer(abs_path)
+  local wanted = canonical_path(abs_path)
+  for _, bufnr in ipairs(api.nvim_list_bufs()) do
+    if api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].buftype == "" then
+      local name = api.nvim_buf_get_name(bufnr)
+      if name ~= "" and canonical_path(name) == wanted then return bufnr end
+    end
+  end
+  return nil
+end
+
+---Replace the content of a buffer with `lines`, touching only the changed
+---region so marks, folds, extmarks and the cursor outside of it survive and
+---the edit lands as a single undo step.
+---@param bufnr integer
+---@param lines string[]
+---@return boolean changed
+local function replace_buffer_lines(bufnr, lines)
+  local old = api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local prefix = 0
+  while prefix < #old and prefix < #lines and old[prefix + 1] == lines[prefix + 1] do
+    prefix = prefix + 1
+  end
+  local suffix = 0
+  while suffix < (#old - prefix) and suffix < (#lines - prefix) and old[#old - suffix] == lines[#lines - suffix] do
+    suffix = suffix + 1
+  end
+  if prefix == #old and prefix == #lines then return false end
+
+  local cursors = {}
+  for _, winid in ipairs(api.nvim_list_wins()) do
+    if api.nvim_win_get_buf(winid) == bufnr then cursors[winid] = api.nvim_win_get_cursor(winid) end
+  end
+
+  local was_modifiable = vim.bo[bufnr].modifiable
+  if not was_modifiable then vim.bo[bufnr].modifiable = true end
+  -- Close the current undo block so the agent's change never merges with the
+  -- user's own pending edits (setting 'undolevels' breaks the undo sequence).
+  pcall(api.nvim_buf_call, bufnr, function() vim.cmd("let &undolevels = &undolevels") end)
+  local replacement = vim.list_slice(lines, prefix + 1, #lines - suffix)
+  local ok, err = pcall(api.nvim_buf_set_lines, bufnr, prefix, #old - suffix, false, replacement)
+  if not was_modifiable then vim.bo[bufnr].modifiable = false end
+  if not ok then error(err, 0) end
+
+  local line_count = api.nvim_buf_line_count(bufnr)
+  for winid, cursor in pairs(cursors) do
+    if api.nvim_win_is_valid(winid) then
+      pcall(api.nvim_win_set_cursor, winid, { math.min(cursor[1], line_count), cursor[2] })
+    end
+  end
+  return true
+end
+
+---Load a buffer without stopping on the swap-file ATTENTION prompt: a modal
+---dialog raised from a scheduled callback would freeze Neovim while the agent
+---waits. If a swap file exists the buffer is opened read-only instead.
+---@param bufnr integer
+local function bufload_without_swap_prompt(bufnr)
+  if api.nvim_buf_is_loaded(bufnr) then return end
+  local group = api.nvim_create_augroup("AvanteACPSwapGuard", { clear = true })
+  api.nvim_create_autocmd("SwapExists", {
+    group = group,
+    once = true,
+    callback = function() vim.v.swapchoice = "o" end,
+  })
+  pcall(vim.fn.bufload, bufnr)
+  pcall(api.nvim_del_augroup_by_id, group)
+end
+
+---Serve an ACP `fs/read_text_file` request. Loaded buffers win over the disk
+---so the agent sees unsaved edits, like it would in Zed. `line` is 1-based
+---and `limit` is a line count; either may be nil.
+---@param path string
+---@param line integer|nil
+---@param limit integer|nil
+---@return string|nil content
+---@return string|nil err
+---@return string|nil errname libuv error name (e.g. "ENOENT") when available
+function M.acp_read_text_file(path, line, limit)
+  local abs_path = Utils.to_absolute_path(path)
+  local file_lines
+  local has_trailing_newline
+  local bufnr = find_loaded_file_buffer(abs_path)
+  if bufnr then
+    file_lines = api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    if #file_lines == 1 and file_lines[1] == "" then file_lines = {} end
+    -- A buffer drops the final newline; restore it the way `:write` would.
+    has_trailing_newline = #file_lines > 0 and (vim.bo[bufnr].endofline or vim.bo[bufnr].fixendofline)
+  else
+    local lines, err, errname = Utils.read_file_from_buf_or_disk(abs_path)
+    if err then return nil, err, errname end
+    file_lines = lines or {}
+    has_trailing_newline = #file_lines > 0 and file_lines[#file_lines] == ""
+    if has_trailing_newline then table.remove(file_lines) end
+  end
+
+  local total = #file_lines
+  local start_idx = 1
+  local end_idx = total
+  if type(line) == "number" then start_idx = math.max(math.floor(line), 1) end
+  if type(limit) == "number" then end_idx = math.min(start_idx + math.floor(limit) - 1, total) end
+  local selected = file_lines
+  if start_idx ~= 1 or end_idx ~= total then selected = vim.list_slice(file_lines, start_idx, end_idx) end
+
+  local content = table.concat(selected, "\n")
+  if #selected > 0 and (end_idx < total or has_trailing_newline) then content = content .. "\n" end
+  return content, nil, nil
+end
+
+---Serve an ACP `fs/write_text_file` request.
+---
+---When the file is open in a buffer the new content is applied to the buffer
+---and saved through `:write`, so unsaved user edits (already reflected in what
+---the agent read) are kept, undo works, `eol`/`fileformat` are honoured and
+---Neovim's own timestamp is refreshed (no "file changed on disk" dialog).
+---`:edit` is deliberately not used: it fails with E37 on a modified buffer,
+---blocks on swap-file prompts and discards undo history.
+---@param path string
+---@param content string
+---@return string|nil err
+function M.acp_write_text_file(path, content)
+  local abs_path = Utils.to_absolute_path(path)
+  local bufnr = find_loaded_file_buffer(abs_path)
+
+  if bufnr then
+    local lines = vim.split(content, "\n", { plain = true })
+    if #lines > 0 and lines[#lines] == "" then table.remove(lines) end
+    if vim.bo[bufnr].fileformat == "dos" then
+      for idx, l in ipairs(lines) do
+        lines[idx] = l:gsub("\r$", "")
+      end
+    end
+    local ok, err = pcall(replace_buffer_lines, bufnr, lines)
+    if not ok then return "Failed to update buffer for " .. abs_path .. ": " .. tostring(err) end
+    if content ~= "" then vim.bo[bufnr].endofline = content:sub(-1) == "\n" end
+    local write_ok, write_err = pcall(api.nvim_buf_call, bufnr, function() vim.cmd("silent write!") end)
+    if not write_ok then return "Failed to write " .. abs_path .. ": " .. tostring(write_err) end
+    return nil
+  end
+
+  local dir = vim.fs.dirname(abs_path)
+  if dir and dir ~= "" and not vim.uv.fs_stat(dir) then
+    local ok = pcall(vim.fn.mkdir, dir, "p")
+    if not ok then return "Failed to create directory " .. dir end
+  end
+  local file, open_err = io.open(abs_path, "w")
+  if not file then return "Failed to write file " .. abs_path .. ": " .. tostring(open_err) end
+  local write_ok, write_err = file:write(content)
+  file:close()
+  if not write_ok then return "Failed to write file " .. abs_path .. ": " .. tostring(write_err) end
+  return nil
+end
+
+---User submissions that have not been sent to the ACP agent yet: the trailing
+---run of user messages that follows the last non-user message (or the last
+---message already marked `acp_sent`).
+---@param history_messages avante.HistoryMessage[]
+---@return avante.HistoryMessage[]
+function M._get_unsent_acp_user_messages(history_messages)
+  local pending = {}
+  for i = #history_messages, 1, -1 do
+    local message = history_messages[i]
+    if not message or not message.message or message.message.role ~= "user" then break end
+    if not message.is_user_submission or message.acp_sent then break end
+    table.insert(pending, 1, message)
+  end
+  return pending
+end
+
+---Flatten the text of a history message into ACP text prompt parts.
+---@param message avante.HistoryMessage
+---@param wrap_tag string|nil wrap each part in `<tag>...</tag>`
+---@return table[]
+local function message_to_acp_text_parts(message, wrap_tag)
+  local parts = {}
+  local function add(text)
+    if type(text) ~= "string" or text == "" then return end
+    if wrap_tag then text = "<" .. wrap_tag .. ">" .. text .. "</" .. wrap_tag .. ">" end
+    table.insert(parts, { type = "text", text = text })
+  end
+  local content = message.message.content
+  if type(content) == "table" then
+    for _, item in ipairs(content) do
+      if type(item) == "string" then
+        add(item)
+      elseif type(item) == "table" and item.type == "text" then
+        add(item.text)
+      end
+    end
+  else
+    add(content)
+  end
+  return parts
+end
+
 ---@param opts AvanteLLMStreamOptions
 function M._stream_acp(opts)
   Utils.debug("use ACP", Config.provider)
@@ -1102,481 +1309,500 @@ function M._stream_acp(opts)
     end
   end
 
-  if not acp_client then
-    local acp_config = vim.tbl_deep_extend("force", acp_provider, {
-      ---@type ACPHandlers
-      handlers = {
-        on_terminal_update = function(terminal)
-          local snapshot = ACPClient.terminal_snapshot(terminal)
-          ---@param tool_call table|nil
-          ---@return boolean
-          local function references_terminal(tool_call)
-            if not tool_call or type(tool_call.content) ~= "table" then return false end
-            for _, item in ipairs(tool_call.content) do
-              if type(item) == "table" and item.type == "terminal" and item.terminalId == terminal.id then
-                return true
-              end
-            end
-            return false
+  ---@type ACPHandlers
+  local handlers = {
+    on_terminal_update = function(terminal)
+      local snapshot = ACPClient.terminal_snapshot(terminal)
+      ---@param tool_call table|nil
+      ---@return boolean
+      local function references_terminal(tool_call)
+        if not tool_call or type(tool_call.content) ~= "table" then return false end
+        for _, item in ipairs(tool_call.content) do
+          if type(item) == "table" and item.type == "terminal" and item.terminalId == terminal.id then
+            return true
           end
-          local messages = {}
-          for _, message in pairs(tool_call_messages) do
-            local referenced = references_terminal(message.acp_tool_call)
-            if not referenced then
-              -- Terminals run by a subagent live on the nested child tool calls.
-              for _, child in ipairs(message.acp_children or {}) do
-                if child.type == "tool_call" and references_terminal(child.tool_call) then
-                  referenced = true
-                  break
-                end
-              end
-            end
-            if referenced then
-              message.acp_terminals = message.acp_terminals or {}
-              message.acp_terminals[terminal.id] = snapshot
-              table.insert(messages, message)
+        end
+        return false
+      end
+      local messages = {}
+      for _, message in pairs(tool_call_messages) do
+        local referenced = references_terminal(message.acp_tool_call)
+        if not referenced then
+          -- Terminals run by a subagent live on the nested child tool calls.
+          for _, child in ipairs(message.acp_children or {}) do
+            if child.type == "tool_call" and references_terminal(child.tool_call) then
+              referenced = true
+              break
             end
           end
-          if #messages > 0 then on_messages_add(messages) end
-        end,
-        on_session_update = function(update)
-          -- While session/load replays the transcript, the agent re-sends every
-          -- message/tool call as session/update notifications. If the avante
-          -- history already contains those messages (a persisted chat being
-          -- re-attached to its ACP session) they must not be appended again.
-          local replay = rawget(opts, "_acp_replay")
-          if replay and replay.skip and REPLAYED_UPDATE_KINDS[update.sessionUpdate] then return end
+        end
+        if referenced then
+          message.acp_terminals = message.acp_terminals or {}
+          message.acp_terminals[terminal.id] = snapshot
+          table.insert(messages, message)
+        end
+      end
+      if #messages > 0 then on_messages_add(messages) end
+    end,
+    on_session_update = function(update)
+      -- While session/load replays the transcript, the agent re-sends every
+      -- message/tool call as session/update notifications. If the avante
+      -- history already contains those messages (a persisted chat being
+      -- re-attached to its ACP session) they must not be appended again.
+      local replay = rawget(opts, "_acp_replay")
+      if replay and replay.skip and REPLAYED_UPDATE_KINDS[update.sessionUpdate] then return end
 
-          -- Terminal output streamed through `_meta` must be ingested for
-          -- every tool call, including those nested under a subagent.
-          if update.sessionUpdate == "tool_call" or update.sessionUpdate == "tool_call_update" then
-            ingest_terminal_meta(update)
-          end
+      -- Terminal output streamed through `_meta` must be ingested for
+      -- every tool call, including those nested under a subagent.
+      if update.sessionUpdate == "tool_call" or update.sessionUpdate == "tool_call_update" then
+        ingest_terminal_meta(update)
+      end
 
-          if update.sessionUpdate == "user_message_chunk" then
-            if not update.content or update.content.type ~= "text" then
-              Utils.debug("ACP user_message_chunk with non-text content", update.content)
-              return
-            end
-            if not replay then
-              -- Outside of replay the user's own submission is normally
-              -- already in the history; only add text that is missing.
-              if update.content.text ~= "" then
-                local message = M._apply_user_message_chunk(get_history_messages(), update.content.text)
-                if message then
-                  on_messages_add({ message })
-                else
-                  Utils.debug("ACP user_message_chunk already present in history, skipped", update.content.text)
-                end
-              end
-              return
-            end
-            local messages = get_history_messages()
-            local last_message = messages[#messages]
-            if last_message and last_message.message.role == "user" and last_message.is_user_submission then
-              local content = last_message.message.content
-              if type(content) == "string" then
-                last_message.message.content = content .. update.content.text
-                on_messages_add({ last_message })
-                return
-              end
-            end
-            local message = History.Message:new("user", update.content.text, { is_user_submission = true })
-            message.state = "generated"
-            on_messages_add({ message })
-            return
-          end
-
-          if update.sessionUpdate == "plan" then
-            -- A subagent's own TodoWrite must not clobber the top-level plan.
-            if get_parent_tool_use_id(update) then return end
-            local todos = {}
-            for idx, entry in ipairs(update.entries) do
-              local status = "todo"
-              if entry.status == "in_progress" then status = "doing" end
-              if entry.status == "completed" then status = "done" end
-              ---@type avante.TODO
-              local todo = {
-                id = tostring(idx),
-                content = entry.content,
-                status = status,
-                priority = entry.priority,
-              }
-              table.insert(todos, todo)
-            end
-            vim.schedule(function()
-              if opts.update_todos then opts.update_todos(todos) end
-            end)
-            return
-          end
-
-          if update.sessionUpdate == "current_mode_update" or update.sessionUpdate == "config_option_update" then
-            -- The client already updated its config_options; refresh the
-            -- winbar ("provider | model | mode") so the new mode is visible.
-            if update.sessionUpdate == "current_mode_update" and update.currentModeId then
-              Utils.info("ACP mode: " .. update.currentModeId)
-            end
-            vim.schedule(function()
-              local sidebar = require("avante").get()
-              if sidebar and sidebar:is_open() then sidebar:render_result() end
-            end)
-            return
-          end
-
-          -- Updates emitted from inside a Claude Code subagent (Task/Agent)
-          -- carry `_meta.claudeCode.parentToolUseId`. Nest them under the
-          -- parent tool call instead of interleaving them with the main
-          -- conversation.
-          local parent_tool_use_id = get_parent_tool_use_id(update)
-          if parent_tool_use_id then
-            local parent = tool_call_messages[parent_tool_use_id]
-            if parent then
-              parent.acp_children = parent.acp_children or {}
-              local children = parent.acp_children
-              if update.sessionUpdate == "tool_call" then
-                ---@type avante.acp.SubagentChild
-                local entry = { type = "tool_call", tool_call = update }
-                table.insert(children, entry)
-                subagent_child_entries[update.toolCallId] = { parent = parent, entry = entry }
-                sync_tool_call_terminals(parent, entry.tool_call)
-                on_messages_add({ parent })
-                return
-              elseif
-                (update.sessionUpdate == "agent_message_chunk" or update.sessionUpdate == "agent_thought_chunk")
-                and update.content
-                and update.content.type == "text"
-              then
-                local child_type = update.sessionUpdate == "agent_thought_chunk" and "thought" or "text"
-                local last = children[#children]
-                if last and last.type == child_type then
-                  last.text = last.text .. update.content.text
-                else
-                  table.insert(children, { type = child_type, text = update.content.text })
-                end
-                on_messages_add({ parent })
-                return
-              end
-            end
-          end
-
-          if update.sessionUpdate == "tool_call_update" then
-            -- Some child updates (e.g. the PostToolUse hook) carry no parent
-            -- meta, so route by toolCallId instead.
-            local child = subagent_child_entries[update.toolCallId]
-            if child then
-              if update.content and next(update.content) == nil then update.content = nil end
-              child.entry.tool_call = vim.tbl_deep_extend("force", child.entry.tool_call, update)
-              sync_tool_call_terminals(child.parent, child.entry.tool_call)
-              on_messages_add({ child.parent })
-              return
-            end
-          end
-
-          if update.sessionUpdate == "agent_message_chunk" then
-            if update.content.type == "text" then
-              local messages = get_history_messages()
-              local last_message = messages[#messages]
-              if last_message and last_message.message.role == "assistant" then
-                local has_text = false
-                local content = last_message.message.content
-                if type(content) == "string" then
-                  last_message.message.content = last_message.message.content .. update.content.text
-                  has_text = true
-                elseif type(content) == "table" then
-                  for idx, item in ipairs(content) do
-                    if type(item) == "string" then
-                      content[idx] = item .. update.content.text
-                      has_text = true
-                    end
-                    if type(item) == "table" and item.type == "text" then
-                      item.text = item.text .. update.content.text
-                      has_text = true
-                    end
-                  end
-                end
-                if has_text then
-                  on_messages_add({ last_message })
-                  return
-                end
-              end
-              local message = History.Message:new("assistant", update.content.text)
+      if update.sessionUpdate == "user_message_chunk" then
+        if not update.content or update.content.type ~= "text" then
+          Utils.debug("ACP user_message_chunk with non-text content", update.content)
+          return
+        end
+        if not replay then
+          -- Outside of replay the user's own submission is normally
+          -- already in the history; only add text that is missing.
+          if update.content.text ~= "" then
+            local message = M._apply_user_message_chunk(get_history_messages(), update.content.text)
+            if message then
               on_messages_add({ message })
-            end
-          end
-
-          if update.sessionUpdate == "agent_thought_chunk" then
-            if update.content.type == "text" then
-              local messages = get_history_messages()
-              local last_message = messages[#messages]
-              if last_message and last_message.message.role == "assistant" then
-                local is_thinking = false
-                local content = last_message.message.content
-                if type(content) == "table" then
-                  for idx, item in ipairs(content) do
-                    if type(item) == "table" and item.type == "thinking" then
-                      is_thinking = true
-                      content[idx].thinking = content[idx].thinking .. update.content.text
-                    end
-                  end
-                end
-                if is_thinking then
-                  on_messages_add({ last_message })
-                  return
-                end
-              end
-              local message = History.Message:new("assistant", {
-                type = "thinking",
-                thinking = update.content.text,
-              })
-              on_messages_add({ message })
-            end
-          end
-
-          -- Follow agent edit locations: navigate to the file being edited.
-          -- Extracted as a function so it can be called from both tool_call
-          -- and tool_call_update (some ACP adapters send locations in the
-          -- update rather than the initial tool_call).
-          local function try_follow_agent_location(upd)
-            if
-              not Config.behaviour.acp_follow_agent_locations
-              or upd.kind ~= "edit"
-              or not upd.locations
-              or #upd.locations < 1
-            then
-              return
-            end
-
-            local sidebar = require("avante").get()
-            if not sidebar or sidebar.is_in_full_view then return end
-
-            vim.schedule(function()
-              if not sidebar:is_open() then return end
-
-              -- Find a valid code window (non-sidebar window)
-              local code_winid = nil
-              if sidebar.code.winid and sidebar.code.winid ~= 0 and api.nvim_win_is_valid(sidebar.code.winid) then
-                code_winid = sidebar.code.winid
-              else
-                local all_wins = api.nvim_tabpage_list_wins(0)
-                for _, winid in ipairs(all_wins) do
-                  if api.nvim_win_is_valid(winid) and not sidebar:is_sidebar_winid(winid) then
-                    code_winid = winid
-                    break
-                  end
-                end
-              end
-
-              if not code_winid then return end
-
-              -- Short debounce to prevent double-fires from the same tool call
-              local now = uv.now()
-              local last_auto_nav = vim.g.avante_last_auto_nav or 0
-              if now - last_auto_nav < 200 then return end
-
-              -- Only follow first location to avoid rapid jumping
-              local location = upd.locations[1]
-              if not location or not location.path then return end
-
-              local abs_path = Utils.is_absolute_path(location.path) and location.path
-                or vim.fs.joinpath(Utils.get_project_root(), location.path)
-              local bufnr = vim.fn.bufnr(abs_path, true)
-
-              if not bufnr or bufnr == -1 then return end
-
-              if not api.nvim_buf_is_loaded(bufnr) then pcall(vim.fn.bufload, bufnr) end
-
-              local ok = pcall(api.nvim_win_set_buf, code_winid, bufnr)
-              if not ok then return end
-
-              local line = location.line or 1
-              local line_count = api.nvim_buf_line_count(bufnr)
-              local target_line = math.min(line, line_count)
-
-              pcall(api.nvim_win_set_cursor, code_winid, { target_line, 0 })
-              pcall(api.nvim_win_call, code_winid, function() vim.cmd("normal! zz") end)
-
-              vim.g.avante_last_auto_nav = now
-            end)
-          end
-
-          if update.sessionUpdate == "tool_call" then
-            local message = add_tool_call_message(update)
-            sync_tool_call_terminals(message)
-            try_follow_agent_location(update)
-          end
-
-          if update.sessionUpdate == "tool_call_update" then
-            -- Also try follow here: some ACP adapters (e.g. claude-agent-acp)
-            -- send locations in tool_call_update rather than the initial tool_call
-            local merged = tool_call_messages[update.toolCallId]
-              and tool_call_messages[update.toolCallId].acp_tool_call
-            if merged then
-              try_follow_agent_location(vim.tbl_deep_extend("force", merged, update))
             else
-              try_follow_agent_location(update)
+              Utils.debug("ACP user_message_chunk already present in history, skipped", update.content.text)
             end
-            local tool_call_message = tool_call_messages[update.toolCallId]
-            if not tool_call_message then
-              tool_call_message = History.Message:new("assistant", {
-                type = "tool_use",
-                id = update.toolCallId,
-                name = "",
-              })
-              tool_call_messages[update.toolCallId] = tool_call_message
-              tool_call_message.acp_tool_call = update
-            end
-            if tool_call_message.acp_tool_call then
-              if update.content and next(update.content) == nil then update.content = nil end
-              tool_call_message.acp_tool_call = vim.tbl_deep_extend("force", tool_call_message.acp_tool_call, update)
-            end
-            annotate_tool_call_message(tool_call_message, update)
-            tool_call_message.tool_use_logs = tool_call_message.tool_use_logs or {}
-            tool_call_message.tool_use_log_lines = tool_call_message.tool_use_log_lines or {}
-            local tool_result_message
-            if update.status == "pending" or update.status == "in_progress" then
-              tool_call_message.is_calling = true
-              tool_call_message.state = "generating"
-            elseif update.status == "completed" or update.status == "failed" then
-              tool_call_message.is_calling = false
-              tool_call_message.state = "generated"
-              tool_result_message = History.Message:new("assistant", {
-                type = "tool_result",
-                tool_use_id = update.toolCallId,
-                content = nil,
-                is_error = update.status == "failed",
-                is_user_declined = update.status == "cancelled",
-              })
-            end
-            sync_tool_call_terminals(tool_call_message)
-            local messages = { tool_call_message }
-            if tool_result_message then table.insert(messages, tool_result_message) end
-            on_messages_add(messages)
           end
-
-          if update.sessionUpdate == "available_commands_update" then
-            -- Replace (not append) the ACP-sourced command set. Completion
-            -- sources read `Utils.get_commands()` lazily, so no cmp source
-            -- re-registration is needed.
-            require("avante.slashcommands").set_acp_commands(update.availableCommands)
+          return
+        end
+        local messages = get_history_messages()
+        local last_message = messages[#messages]
+        if last_message and last_message.message.role == "user" and last_message.is_user_submission then
+          local content = last_message.message.content
+          if type(content) == "string" then
+            last_message.message.content = content .. update.content.text
+            on_messages_add({ last_message })
+            return
           end
-        end,
+        end
+        local message = History.Message:new("user", update.content.text, { is_user_submission = true })
+        message.state = "generated"
+        on_messages_add({ message })
+        return
+      end
 
-        on_request_permission = function(tool_call, options, callback)
+      if update.sessionUpdate == "plan" then
+        -- A subagent's own TodoWrite must not clobber the top-level plan.
+        if get_parent_tool_use_id(update) then return end
+        local todos = {}
+        for idx, entry in ipairs(update.entries) do
+          local status = "todo"
+          if entry.status == "in_progress" then status = "doing" end
+          if entry.status == "completed" then status = "done" end
+          ---@type avante.TODO
+          local todo = {
+            id = tostring(idx),
+            content = entry.content,
+            status = status,
+            priority = entry.priority,
+          }
+          table.insert(todos, todo)
+        end
+        vim.schedule(function()
+          if opts.update_todos then opts.update_todos(todos) end
+        end)
+        return
+      end
+
+      if update.sessionUpdate == "current_mode_update" or update.sessionUpdate == "config_option_update" then
+        -- The client already updated its config_options; refresh the
+        -- winbar ("provider | model | mode") so the new mode is visible.
+        if update.sessionUpdate == "current_mode_update" and update.currentModeId then
+          Utils.info("ACP mode: " .. update.currentModeId)
+        end
+        vim.schedule(function()
           local sidebar = require("avante").get()
-          if not sidebar then
-            Utils.error("Avante sidebar not found")
+          if sidebar and sidebar:is_open() then sidebar:render_result() end
+        end)
+        return
+      end
+
+      -- Updates emitted from inside a Claude Code subagent (Task/Agent)
+      -- carry `_meta.claudeCode.parentToolUseId`. Nest them under the
+      -- parent tool call instead of interleaving them with the main
+      -- conversation.
+      local parent_tool_use_id = get_parent_tool_use_id(update)
+      if parent_tool_use_id then
+        local parent = tool_call_messages[parent_tool_use_id]
+        if parent then
+          parent.acp_children = parent.acp_children or {}
+          local children = parent.acp_children
+          if update.sessionUpdate == "tool_call" then
+            ---@type avante.acp.SubagentChild
+            local entry = { type = "tool_call", tool_call = update }
+            table.insert(children, entry)
+            subagent_child_entries[update.toolCallId] = { parent = parent, entry = entry }
+            sync_tool_call_terminals(parent, entry.tool_call)
+            on_messages_add({ parent })
             return
-          end
-
-          ---@cast tool_call avante.acp.ToolCall
-
-          local message = tool_call_messages[tool_call.toolCallId]
-          local child = subagent_child_entries[tool_call.toolCallId]
-          local description
-          if child then
-            -- Permission request for a tool run by a subagent: keep it nested
-            -- under the parent instead of creating a top-level message.
-            if tool_call.content and next(tool_call.content) == nil then tool_call.content = nil end
-            child.entry.tool_call = vim.tbl_deep_extend("force", child.entry.tool_call, tool_call)
-            message = child.parent
-            description = "Subagent tool: " .. (tool_call.title or child.entry.tool_call.title or tool_call.kind or "")
-          elseif not message then
-            message = add_tool_call_message(tool_call)
-          else
-            if message.acp_tool_call then
-              if tool_call.content and next(tool_call.content) == nil then tool_call.content = nil end
-              message.acp_tool_call = vim.tbl_deep_extend("force", message.acp_tool_call, tool_call)
-            end
-            annotate_tool_call_message(message, tool_call)
-          end
-
-          -- A pending permission request means the tool call is in progress; the sidebar
-          -- only renders the inline permission buttons for generating/calling messages.
-          message.is_calling = true
-          message.state = "generating"
-          on_messages_add({ message })
-
-          if not description then description = HistoryRender.get_tool_display_name(message) end
-          LLMToolHelpers.confirm(description, function(ok)
-            local acp_mapped_options = ACPConfirmAdapter.map_acp_options(options)
-
-            if ok and opts.session_ctx and opts.session_ctx.always_yes then
-              callback(acp_mapped_options.all)
-            elseif ok then
-              callback(acp_mapped_options.yes)
-            else
-              callback(acp_mapped_options.no)
-            end
-
-            sidebar.scroll = true
-            sidebar._history_cache_invalidated = true
-            sidebar:update_content("")
-          end, {
-            focus = true,
-            skip_reject_prompt = true,
-            permission_options = options,
-          }, opts.session_ctx, tool_call.kind)
-        end,
-        on_read_file = function(path, line, limit, callback, error_callback)
-          local abs_path = Utils.to_absolute_path(path)
-          local lines, err, errname = Utils.read_file_from_buf_or_disk(abs_path)
-          if err then
-            if error_callback then
-              local code = errname == "ENOENT" and ACPClient.ERROR_CODES.RESOURCE_NOT_FOUND or nil
-              error_callback(err, code)
-            end
-            return
-          end
-          ---@type string[]
-          local file_lines = lines or {}
-          if line ~= nil and limit ~= nil then file_lines = vim.list_slice(file_lines, line, line + limit) end
-          local content = table.concat(file_lines, "\n")
-          if
-            last_tool_call_message
-            and last_tool_call_message.acp_tool_call
-            and last_tool_call_message.acp_tool_call.kind == "read"
+          elseif
+            (update.sessionUpdate == "agent_message_chunk" or update.sessionUpdate == "agent_thought_chunk")
+            and update.content
+            and update.content.type == "text"
           then
-            if
-              last_tool_call_message.acp_tool_call.content
-              and next(last_tool_call_message.acp_tool_call.content) == nil
-            then
-              last_tool_call_message.acp_tool_call.content = {
-                {
-                  type = "content",
-                  content = {
-                    type = "text",
-                    text = content,
-                  },
-                },
-              }
+            local child_type = update.sessionUpdate == "agent_thought_chunk" and "thought" or "text"
+            local last = children[#children]
+            if last and last.type == child_type then
+              last.text = last.text .. update.content.text
+            else
+              table.insert(children, { type = child_type, text = update.content.text })
             end
-          end
-          callback(content)
-        end,
-        on_write_file = function(path, content, callback)
-          local abs_path = Utils.to_absolute_path(path)
-          local normalized_abs_path = Utils.abspath(abs_path)
-          local file = io.open(abs_path, "w")
-          if file then
-            file:write(content)
-            file:close()
-            local buffers = vim.tbl_filter(
-              function(bufnr)
-                return vim.api.nvim_buf_is_valid(bufnr)
-                  and Utils.abspath(vim.api.nvim_buf_get_name(bufnr)) == normalized_abs_path
-              end,
-              vim.api.nvim_list_bufs()
-            )
-            for _, buf in ipairs(buffers) do
-              vim.api.nvim_buf_call(buf, function() vim.cmd("edit") end)
-            end
-            callback(nil)
+            on_messages_add({ parent })
             return
           end
-          callback("Failed to write file: " .. abs_path)
-        end,
-      },
-    })
+        end
+      end
+
+      if update.sessionUpdate == "tool_call_update" then
+        -- Some child updates (e.g. the PostToolUse hook) carry no parent
+        -- meta, so route by toolCallId instead.
+        local child = subagent_child_entries[update.toolCallId]
+        if child then
+          if update.content and next(update.content) == nil then update.content = nil end
+          child.entry.tool_call = vim.tbl_deep_extend("force", child.entry.tool_call, update)
+          sync_tool_call_terminals(child.parent, child.entry.tool_call)
+          on_messages_add({ child.parent })
+          return
+        end
+      end
+
+      if update.sessionUpdate == "agent_message_chunk" then
+        if update.content.type == "text" then
+          local messages = get_history_messages()
+          local last_message = messages[#messages]
+          if last_message and last_message.message.role == "assistant" then
+            local has_text = false
+            local content = last_message.message.content
+            if type(content) == "string" then
+              last_message.message.content = last_message.message.content .. update.content.text
+              has_text = true
+            elseif type(content) == "table" then
+              for idx, item in ipairs(content) do
+                if type(item) == "string" then
+                  content[idx] = item .. update.content.text
+                  has_text = true
+                end
+                if type(item) == "table" and item.type == "text" then
+                  item.text = item.text .. update.content.text
+                  has_text = true
+                end
+              end
+            end
+            if has_text then
+              on_messages_add({ last_message })
+              return
+            end
+          end
+          local message = History.Message:new("assistant", update.content.text)
+          on_messages_add({ message })
+        end
+      end
+
+      if update.sessionUpdate == "agent_thought_chunk" then
+        if update.content.type == "text" then
+          local messages = get_history_messages()
+          local last_message = messages[#messages]
+          if last_message and last_message.message.role == "assistant" then
+            local is_thinking = false
+            local content = last_message.message.content
+            if type(content) == "table" then
+              for idx, item in ipairs(content) do
+                if type(item) == "table" and item.type == "thinking" then
+                  is_thinking = true
+                  content[idx].thinking = content[idx].thinking .. update.content.text
+                end
+              end
+            end
+            if is_thinking then
+              on_messages_add({ last_message })
+              return
+            end
+          end
+          local message = History.Message:new("assistant", {
+            type = "thinking",
+            thinking = update.content.text,
+          })
+          on_messages_add({ message })
+        end
+      end
+
+      -- Follow agent edit locations: navigate to the file being edited.
+      -- Extracted as a function so it can be called from both tool_call
+      -- and tool_call_update (some ACP adapters send locations in the
+      -- update rather than the initial tool_call).
+      local function try_follow_agent_location(upd)
+        if
+          not Config.behaviour.acp_follow_agent_locations
+          or upd.kind ~= "edit"
+          or not upd.locations
+          or #upd.locations < 1
+        then
+          return
+        end
+
+        local sidebar = require("avante").get()
+        if not sidebar or sidebar.is_in_full_view then return end
+
+        vim.schedule(function()
+          if not sidebar:is_open() then return end
+
+          -- Find a valid code window (non-sidebar window)
+          local code_winid = nil
+          if sidebar.code.winid and sidebar.code.winid ~= 0 and api.nvim_win_is_valid(sidebar.code.winid) then
+            code_winid = sidebar.code.winid
+          else
+            local all_wins = api.nvim_tabpage_list_wins(0)
+            for _, winid in ipairs(all_wins) do
+              if api.nvim_win_is_valid(winid) and not sidebar:is_sidebar_winid(winid) then
+                code_winid = winid
+                break
+              end
+            end
+          end
+
+          if not code_winid then return end
+
+          -- Short debounce to prevent double-fires from the same tool call
+          local now = uv.now()
+          local last_auto_nav = vim.g.avante_last_auto_nav or 0
+          if now - last_auto_nav < 200 then return end
+
+          -- Only follow first location to avoid rapid jumping
+          local location = upd.locations[1]
+          if not location or not location.path then return end
+
+          local abs_path = Utils.is_absolute_path(location.path) and location.path
+            or vim.fs.joinpath(Utils.get_project_root(), location.path)
+          local bufnr = vim.fn.bufnr(abs_path, true)
+
+          if not bufnr or bufnr == -1 then return end
+
+          bufload_without_swap_prompt(bufnr)
+          if not api.nvim_buf_is_loaded(bufnr) then return end
+
+          local ok = pcall(api.nvim_win_set_buf, code_winid, bufnr)
+          if not ok then return end
+
+          local line = location.line or 1
+          local line_count = api.nvim_buf_line_count(bufnr)
+          local target_line = math.min(line, line_count)
+
+          pcall(api.nvim_win_set_cursor, code_winid, { target_line, 0 })
+          pcall(api.nvim_win_call, code_winid, function() vim.cmd("normal! zz") end)
+
+          vim.g.avante_last_auto_nav = now
+        end)
+      end
+
+      if update.sessionUpdate == "tool_call" then
+        local message = add_tool_call_message(update)
+        sync_tool_call_terminals(message)
+        try_follow_agent_location(update)
+      end
+
+      if update.sessionUpdate == "tool_call_update" then
+        -- Also try follow here: some ACP adapters (e.g. claude-agent-acp)
+        -- send locations in tool_call_update rather than the initial tool_call
+        local merged = tool_call_messages[update.toolCallId]
+          and tool_call_messages[update.toolCallId].acp_tool_call
+        if merged then
+          try_follow_agent_location(vim.tbl_deep_extend("force", merged, update))
+        else
+          try_follow_agent_location(update)
+        end
+        local tool_call_message = tool_call_messages[update.toolCallId]
+        if not tool_call_message then
+          tool_call_message = History.Message:new("assistant", {
+            type = "tool_use",
+            id = update.toolCallId,
+            name = "",
+          })
+          tool_call_messages[update.toolCallId] = tool_call_message
+          tool_call_message.acp_tool_call = update
+        end
+        if tool_call_message.acp_tool_call then
+          if update.content and next(update.content) == nil then update.content = nil end
+          tool_call_message.acp_tool_call = vim.tbl_deep_extend("force", tool_call_message.acp_tool_call, update)
+        end
+        annotate_tool_call_message(tool_call_message, update)
+        tool_call_message.tool_use_logs = tool_call_message.tool_use_logs or {}
+        tool_call_message.tool_use_log_lines = tool_call_message.tool_use_log_lines or {}
+        local tool_result_message
+        if update.status == "pending" or update.status == "in_progress" then
+          tool_call_message.is_calling = true
+          tool_call_message.state = "generating"
+        elseif update.status == "completed" or update.status == "failed" or update.status == "cancelled" then
+          tool_call_message.is_calling = false
+          tool_call_message.state = "generated"
+          tool_result_message = History.Message:new("assistant", {
+            type = "tool_result",
+            tool_use_id = update.toolCallId,
+            content = nil,
+            is_error = update.status ~= "completed",
+            is_user_declined = update.status == "cancelled",
+          })
+        end
+        sync_tool_call_terminals(tool_call_message)
+        local messages = { tool_call_message }
+        if tool_result_message then table.insert(messages, tool_result_message) end
+        on_messages_add(messages)
+      end
+
+      if update.sessionUpdate == "available_commands_update" then
+        -- Replace (not append) the ACP-sourced command set. Completion
+        -- sources read `Utils.get_commands()` lazily, so no cmp source
+        -- re-registration is needed.
+        require("avante.slashcommands").set_acp_commands(update.availableCommands)
+      end
+    end,
+
+    on_request_permission = function(tool_call, options, callback)
+      local sidebar = require("avante").get()
+      if not sidebar then
+        Utils.error("Avante sidebar not found; cancelling the agent's permission request")
+        callback(nil)
+        return
+      end
+
+      ---@cast tool_call avante.acp.ToolCall
+
+      local message = tool_call_messages[tool_call.toolCallId]
+      local child = subagent_child_entries[tool_call.toolCallId]
+      local description
+      if child then
+        -- Permission request for a tool run by a subagent: keep it nested
+        -- under the parent instead of creating a top-level message.
+        if tool_call.content and next(tool_call.content) == nil then tool_call.content = nil end
+        child.entry.tool_call = vim.tbl_deep_extend("force", child.entry.tool_call, tool_call)
+        message = child.parent
+        description = "Subagent tool: " .. (tool_call.title or child.entry.tool_call.title or tool_call.kind or "")
+      elseif not message then
+        message = add_tool_call_message(tool_call)
+      else
+        if message.acp_tool_call then
+          if tool_call.content and next(tool_call.content) == nil then tool_call.content = nil end
+          message.acp_tool_call = vim.tbl_deep_extend("force", message.acp_tool_call, tool_call)
+        end
+        annotate_tool_call_message(message, tool_call)
+      end
+
+      -- A pending permission request means the tool call is in progress; the sidebar
+      -- only renders the inline permission buttons for generating/calling messages.
+      message.is_calling = true
+      message.state = "generating"
+      on_messages_add({ message })
+
+      if not description then description = HistoryRender.get_tool_display_name(message) end
+      -- `auto_approve_tool_permissions` may list either the ACP kind
+      -- ("edit", "execute", ...) or the agent's own tool name ("Edit", "Bash").
+      local permission_tool_name = tool_call.kind
+      local auto_approve = Config.behaviour.auto_approve_tool_permissions
+      local cc_meta = get_claude_code_meta(tool_call)
+      local native_tool_name = (cc_meta and cc_meta.toolName) or message.acp_tool_name
+      if type(auto_approve) == "table" and native_tool_name and vim.tbl_contains(auto_approve, native_tool_name) then
+        permission_tool_name = native_tool_name
+      end
+      LLMToolHelpers.confirm(description, function(ok)
+        local acp_mapped_options = ACPConfirmAdapter.map_acp_options(options)
+
+        if ok and opts.session_ctx and opts.session_ctx.always_yes then
+          callback(acp_mapped_options.all or acp_mapped_options.yes)
+        elseif ok then
+          callback(acp_mapped_options.yes or acp_mapped_options.all)
+        else
+          callback(acp_mapped_options.no)
+        end
+
+        sidebar.scroll = true
+        sidebar._history_cache_invalidated = true
+        sidebar:update_content("")
+      end, {
+        focus = true,
+        skip_reject_prompt = true,
+        permission_options = options,
+        message_uuid = message.uuid,
+      }, opts.session_ctx, permission_tool_name)
+    end,
+    on_read_file = function(path, line, limit, callback, error_callback)
+      local content, err, errname = M.acp_read_text_file(path, line, limit)
+      if content == nil then
+        local code = errname == "ENOENT" and ACPClient.ERROR_CODES.RESOURCE_NOT_FOUND or nil
+        error_callback(err or ("Failed to read " .. tostring(path)), code)
+        return
+      end
+      if
+        last_tool_call_message
+        and last_tool_call_message.acp_tool_call
+        and last_tool_call_message.acp_tool_call.kind == "read"
+      then
+        if
+          last_tool_call_message.acp_tool_call.content
+          and next(last_tool_call_message.acp_tool_call.content) == nil
+        then
+          last_tool_call_message.acp_tool_call.content = {
+            {
+              type = "content",
+              content = {
+                type = "text",
+                text = content,
+              },
+            },
+          }
+        end
+      end
+      callback(content)
+    end,
+    on_write_file = function(path, content, callback) callback(M.acp_write_text_file(path, content)) end,
+  }
+
+  ---Close every tool call that never received a terminal status once the turn
+  ---is over, so no message keeps spinning (and showing permission buttons).
+  ---@param reason "complete" | "cancelled" | "error"
+  rawset(opts, "_acp_finalize_tool_calls", function(reason)
+    local dangling = {}
+    for tool_call_id, message in pairs(tool_call_messages) do
+      if message.is_calling then
+        message.is_calling = false
+        message.state = "generated"
+        local call = message.acp_tool_call
+        if call and call.status ~= "completed" and call.status ~= "failed" then
+          call.status = reason == "complete" and "completed" or "cancelled"
+        end
+        table.insert(dangling, message)
+        table.insert(
+          dangling,
+          History.Message:new("assistant", {
+            type = "tool_result",
+            tool_use_id = tool_call_id,
+            content = nil,
+            is_error = reason ~= "complete",
+            is_user_declined = reason == "cancelled",
+          })
+        )
+      end
+    end
+    if #dangling > 0 then on_messages_add(dangling) end
+  end)
+
+  if acp_client then
+    -- The agent process is reused across turns, but its callbacks must feed
+    -- this request: the handlers close over this call's opts and tool call
+    -- bookkeeping. Keeping the first turn's handlers would route replay
+    -- suppression, todo updates and permission prompts through stale state.
+    acp_client.config.handlers = handlers
+  else
+    local acp_config = vim.tbl_deep_extend("force", acp_provider, { handlers = handlers })
     acp_client = ACPClient:new(acp_config)
 
     acp_client:connect(function(conn_err)
@@ -1611,7 +1837,9 @@ function M._stream_acp(opts)
       end
     end)
     return
-  elseif not session_id then
+  end
+
+  if not session_id then
     M._create_acp_session_and_continue(opts, acp_client)
     return
   elseif not acp_client:is_session_active(session_id) then
@@ -1722,7 +1950,10 @@ function M._create_acp_session_and_continue(opts, acp_client)
   local mcp_servers = M._resolve_acp_mcp_servers(acp_provider)
   acp_client:create_session(project_root, mcp_servers, function(session_id_, err)
     if err then
-      opts.on_stop({ reason = "error", error = err })
+      -- The client has already turned the agent's error into a readable message;
+      -- show that rather than dumping the whole JSON-RPC error table.
+      local message = type(err) == "table" and type(err.message) == "string" and err.message or err
+      opts.on_stop({ reason = "error", error = message })
       return
     end
     if not session_id_ then
@@ -1731,6 +1962,12 @@ function M._create_acp_session_and_continue(opts, acp_client)
     end
     opts.acp_session_id = session_id_
     if opts.on_save_acp_session_id then opts.on_save_acp_session_id(session_id_) end
+    -- A brand-new agent session knows nothing about the chat so far; the
+    -- first prompt carries earlier user messages as context. Remember it on
+    -- the client too, because the prompt may come from a later submit.
+    rawset(opts, "_acp_new_session", true)
+    acp_client.fresh_session_ids = acp_client.fresh_session_ids or {}
+    acp_client.fresh_session_ids[session_id_] = true
 
     if opts.just_connect_acp_client then return end
     M._continue_stream_acp(opts, acp_client, session_id_)
@@ -2102,90 +2339,71 @@ function M._continue_stream_acp(opts, acp_client, session_id)
           .. " recent messages preserved for context</system_context>",
       })
     end
-  elseif opts.acp_session_id then
-    -- Original logic for non-recovery session continuation
-    local recovery_config = Config.session_recovery or {}
-    local include_history_count = recovery_config.include_history_count or 5
-    local user_messages_added = 0
-
-    for i = #history_messages, 1, -1 do
-      local message = history_messages[i]
-      if message.message.role == "user" and user_messages_added < include_history_count then
-        local content = message.message.content
-        if type(content) == "table" then
-          for _, item in ipairs(content) do
-            if type(item) == "string" then
-              table.insert(prompt, {
-                type = "text",
-                text = "<previous_user_message>" .. item .. "</previous_user_message>",
-              })
-            elseif type(item) == "table" and item.type == "text" then
-              table.insert(prompt, {
-                type = "text",
-                text = "<previous_user_message>" .. item.text .. "</previous_user_message>",
-              })
-            end
-          end
-        elseif type(content) == "string" then
-          table.insert(prompt, {
-            type = "text",
-            text = "<previous_user_message>" .. content .. "</previous_user_message>",
-          })
+  elseif donot_use_builtin_system_prompt then
+    -- The agent keeps the conversation in its own session, so only send what
+    -- it has not seen yet: the user's new submission(s). Re-sending earlier
+    -- turns makes agents such as Claude Code answer old questions again.
+    local pending = M._get_unsent_acp_user_messages(history_messages)
+    if #pending == 0 then
+      -- Nothing new (e.g. a retry after an error): resend the last user message
+      for i = #history_messages, 1, -1 do
+        if history_messages[i].message.role == "user" then
+          pending = { history_messages[i] }
+          break
         end
-        user_messages_added = user_messages_added + 1
+      end
+    end
+    local pending_uuids = {}
+    for _, message in ipairs(pending) do
+      if message.uuid then pending_uuids[message.uuid] = true end
+    end
+
+    local fresh_session_ids = acp_client.fresh_session_ids
+    local is_new_session = rawget(opts, "_acp_new_session") == true
+      or (fresh_session_ids ~= nil and fresh_session_ids[session_id] == true)
+    if fresh_session_ids then fresh_session_ids[session_id] = nil end
+    if is_new_session then
+      -- A fresh agent session attached to an existing chat: hand over the
+      -- most recent earlier user messages as context, once.
+      local recovery_config = Config.session_recovery or {}
+      local include_history_count = recovery_config.include_history_count or 5
+      local previous = {}
+      for i = #history_messages, 1, -1 do
+        local message = history_messages[i]
+        if message.message.role == "user" and not pending_uuids[message.uuid] then
+          table.insert(previous, 1, message)
+          if #previous >= include_history_count then break end
+        end
+      end
+      for _, message in ipairs(previous) do
+        vim.list_extend(prompt, message_to_acp_text_parts(message, "previous_user_message"))
+      end
+      if #previous > 0 then
+        table.insert(prompt, {
+          type = "text",
+          text = "<system_context>Continuing from previous session with "
+            .. #previous
+            .. " recent user messages</system_context>",
+        })
       end
     end
 
-    -- Add context about session recovery
-    if user_messages_added > 0 then
-      table.insert(prompt, {
-        type = "text",
-        text = "<system_context>Continuing from previous session with "
-          .. user_messages_added
-          .. " recent user messages</system_context>",
-      })
+    for _, message in ipairs(pending) do
+      vim.list_extend(prompt, message_to_acp_text_parts(message))
     end
+    rawset(opts, "_acp_pending_messages", pending)
   else
-    if donot_use_builtin_system_prompt then
-      -- Include all user messages for better context preservation
-      for _, message in ipairs(history_messages) do
-        if message.message.role == "user" then
-          local content = message.message.content
-          if type(content) == "table" then
-            for _, item in ipairs(content) do
-              if type(item) == "string" then
-                table.insert(prompt, {
-                  type = "text",
-                  text = item,
-                })
-              elseif type(item) == "table" and item.type == "text" then
-                table.insert(prompt, {
-                  type = "text",
-                  text = item.text,
-                })
-              end
-            end
-          else
-            table.insert(prompt, {
-              type = "text",
-              text = content,
-            })
-          end
-        end
-      end
-    else
-      local prompt_opts = M.generate_prompts(opts)
-      table.insert(prompt, {
-        type = "text",
-        text = prompt_opts.system_prompt,
-      })
-      for _, message in ipairs(prompt_opts.messages) do
-        if message.role == "user" then
-          table.insert(prompt, {
-            type = "text",
-            text = message.content,
-          })
-        end
+    local prompt_opts = M.generate_prompts(opts)
+    table.insert(prompt, {
+      type = "text",
+      text = prompt_opts.system_prompt,
+    })
+    for _, message in ipairs(prompt_opts.messages) do
+      if message.role == "user" then
+        table.insert(prompt, {
+          type = "text",
+          text = message.content,
+        })
       end
     end
   end
@@ -2195,6 +2413,11 @@ function M._continue_stream_acp(opts, acp_client, session_id)
   end
 
   local cancelled = false
+  local finalize_tool_calls = rawget(opts, "_acp_finalize_tool_calls")
+  ---@param reason "complete" | "cancelled" | "error"
+  local function finalize(reason)
+    if type(finalize_tool_calls) == "function" then pcall(finalize_tool_calls, reason) end
+  end
   local stop_cmd_id = api.nvim_create_autocmd("User", {
     group = group,
     pattern = M.CANCEL_PATTERN,
@@ -2209,7 +2432,11 @@ function M._continue_stream_acp(opts, acp_client, session_id)
         })
         opts.on_messages_add({ message })
       end
+      -- The client answers in-flight permission requests with "cancelled";
+      -- drop the prompt shown for them so it cannot be answered twice.
+      LLMToolHelpers.clear_inline_confirm()
       acp_client:cancel_session(session_id)
+      finalize("cancelled")
       opts.on_stop({ reason = "cancelled" })
     end,
   })
@@ -2339,7 +2566,16 @@ function M._continue_stream_acp(opts, acp_client, session_id)
         -- CRITICAL: Return immediately to prevent further processing in fast event context
         return
       end
-      opts.on_stop({ reason = "error", error = err_ })
+      LLMToolHelpers.clear_inline_confirm()
+      finalize("error")
+      -- Give the sidebar a readable explanation for well-known failures
+      -- (agent not logged in, ...) instead of the raw JSON-RPC error table.
+      local described = ACPClient.describe_error(err_)
+      if described ~= err_ and type(described.message) == "string" then
+        opts.on_stop({ reason = "error", error = described.message })
+      else
+        opts.on_stop({ reason = "error", error = err_ })
+      end
       return
     end
     local stop_reason = type(result) == "table" and result.stopReason or nil
@@ -2350,8 +2586,13 @@ function M._continue_stream_acp(opts, acp_client, session_id)
         opts.on_messages_add({ History.Message:new("assistant", notice, { just_for_display = true }) })
       end
     end
+    finalize(on_stop_reason == "cancelled" and "cancelled" or "complete")
     opts.on_stop({ reason = on_stop_reason, acp_stop_reason = stop_reason })
   end)
+  -- From here on the agent owns these messages; never send them again.
+  for _, message in ipairs(rawget(opts, "_acp_pending_messages") or {}) do
+    message.acp_sent = true
+  end
 end
 
 ---Map an ACP `session/prompt` stopReason to a user-facing notice and an on_stop reason.
@@ -2848,6 +3089,7 @@ function M.cancel_inflight_request()
     LLMToolHelpers.confirm_popup:cancel()
     LLMToolHelpers.confirm_popup = nil
   end
+  LLMToolHelpers.clear_inline_confirm()
   abort_retry_timer = true
 
   api.nvim_exec_autocmds("User", { pattern = M.CANCEL_PATTERN })

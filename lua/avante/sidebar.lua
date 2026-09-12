@@ -137,6 +137,8 @@ local SIDEBAR_CONTAINERS = {
 ---@field post_render? fun(sidebar: avante.Sidebar)
 ---@field permission_handler fun(id: string) | nil
 ---@field permission_button_options ({ id: string, icon: string|nil, name: string }[]) | nil
+---@field permission_message_uuid string | nil uuid of the message the inline permission buttons are rendered under
+---@field queued_submissions string[] | nil messages submitted while a turn was running, sent once it ends
 ---@field expanded_message_uuids table<string, boolean>
 ---@field tool_message_positions table<string, [integer, integer]>
 ---@field skip_line_count integer | nil
@@ -2072,7 +2074,8 @@ function Sidebar:get_message_lines(ctx, message, messages, ignore_record_prefix)
   local expanded = self.expanded_message_uuids[message.uuid]
   if message.state == "generating" or message.is_calling then
     local lines = self:_get_message_lines(ctx, message, messages, ignore_record_prefix)
-    if self.permission_handler and self.permission_button_options then
+    local buttons_belong_here = self.permission_message_uuid == nil or self.permission_message_uuid == message.uuid
+    if self.permission_handler and self.permission_button_options and buttons_belong_here then
       local ButtonGroupLine = require("avante.ui.button_group_line")
       local button_group_line = ButtonGroupLine:new(self.permission_button_options, {
         on_click = self.permission_handler,
@@ -2809,7 +2812,12 @@ function Sidebar:handle_submit(request)
   if Config.prompt_logger.enabled then PromptLogger.log_prompt(request) end
 
   if self.is_generating then
-    self:add_history_messages({ History.Message:new("user", request) })
+    if request == "" then return end
+    -- Like Claude Code's own input queue: keep the text aside and submit it
+    -- once the current turn ends (see flush_queued_submissions).
+    self.queued_submissions = self.queued_submissions or {}
+    table.insert(self.queued_submissions, request)
+    Utils.info("Avante is still generating; your message is queued and will be sent when the turn finishes.")
     return
   end
 
@@ -2962,6 +2970,8 @@ function Sidebar:handle_submit(request)
         }),
       })
       on_state_change("failed")
+      Path.history.save(self.code.bufnr, self.chat_history)
+      self:flush_queued_submissions(false)
       return
     end
 
@@ -2983,6 +2993,14 @@ function Sidebar:handle_submit(request)
     end, 0)
 
     Path.history.save(self.code.bufnr, self.chat_history)
+
+    -- Messages submitted while generating: send the next one, or hand them
+    -- back to the user when the turn did not complete.
+    if stop_opts.reason == "complete" then
+      vim.schedule(function() self:flush_queued_submissions(true) end)
+    else
+      self:flush_queued_submissions(false)
+    end
   end
 
   if request and request ~= "" then
@@ -3051,9 +3069,46 @@ function Sidebar:handle_submit(request)
 
     stream_options.on_memory_summarize = on_memory_summarize
 
-    if request ~= "" then on_state_change("generating") end
-    Llm.stream(stream_options)
+    if request ~= "" then
+      self.is_generating = true
+      on_state_change("generating")
+    end
+    -- A synchronous failure inside the provider must not leave the sidebar
+    -- locked in the generating state.
+    local ok, err = xpcall(function() Llm.stream(stream_options) end, debug.traceback)
+    if not ok then
+      Utils.debug("Llm.stream failed:", err)
+      local message = type(err) == "string" and err:match("^[^\n]*") or tostring(err)
+      on_stop({ reason = "error", error = message })
+    end
   end)
+end
+
+---Deal with messages that were submitted while a turn was in progress.
+---@param send boolean true: submit the next queued message; false: put the queued text back into the input box
+function Sidebar:flush_queued_submissions(send)
+  local queued = self.queued_submissions or {}
+  if #queued == 0 then return end
+  if send then
+    if self.is_generating then return end
+    -- One at a time; the remaining ones follow when this turn finishes.
+    self:handle_submit(table.remove(queued, 1))
+    return
+  end
+
+  self.queued_submissions = {}
+  local input = self.containers.input
+  if input and input.bufnr and api.nvim_buf_is_valid(input.bufnr) then
+    local lines = api.nvim_buf_get_lines(input.bufnr, 0, -1, false)
+    if #lines == 1 and lines[1] == "" then lines = {} end
+    for _, text in ipairs(queued) do
+      vim.list_extend(lines, vim.split(text, "\n", { plain = true }))
+    end
+    api.nvim_buf_set_lines(input.bufnr, 0, -1, false, lines)
+    Utils.warn("The turn did not complete; your queued message was put back into the input box.")
+  else
+    Utils.warn("The turn did not complete; queued message dropped: " .. table.concat(queued, "\n"))
+  end
 end
 
 function Sidebar:initialize_token_count()

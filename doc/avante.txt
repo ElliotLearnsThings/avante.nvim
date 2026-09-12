@@ -15,6 +15,13 @@ avante.nvim                                                        *avante-nvim*
    and Kimi CLI.
  - Optional RAG service and web-search tools.
 
+ This is the ElliotLearnsThings/avante.nvim fork of yetone/avante.nvim. It
+ tracks upstream and adds a deeper Claude Code integration over ACP: file
+ reads and edits served from Neovim buffers, subagent and plan-mode
+ rendering with `/plan`, a Claude Code session browser (|:AvanteACPSessions|),
+ agent-provided slash commands and `/login`, terminals, MCP servers and image
+ prompts. See |avante-acp| and the "What this fork adds" section of the README.
+
 
 ==============================================================================
 Table of Contents                                              *avante-contents*
@@ -45,7 +52,10 @@ Converts html to markdown ···························
 ==============================================================================
 Installation                                               *avante-installation*
 
-See the official README at https://github.com/yetone/avante.nvim for installation instructions.
+See the README at https://github.com/ElliotLearnsThings/avante.nvim for
+installation instructions; its "Installing the fork" section covers the plugin
+spec and how to obtain the Rust libraries. The upstream project lives at
+https://github.com/yetone/avante.nvim.
 
 ==============================================================================
 Requirements                                               *avante-requirements*
@@ -1307,6 +1317,21 @@ Built-in slash commands available in the Avante input buffer.
  - `/lines <start>-<end> <question>`: ask about specific lines
  - `/commit`: generate a commit message
 
+ ACP agents (e.g. Claude Code via `claude-agent-acp`) may advertise their
+ own commands through `available_commands_update`. Those are registered in
+ `Config.slash_commands` with `source = "acp"` and are replaced wholesale on
+ every update, so commands from a previous agent never linger. When an ACP
+ command is submitted the raw `/name args` text is forwarded to the agent
+ unchanged.
+
+ Precedence when an agent advertises a command with the same name as a
+ built-in one: `/clear`, `/model` and `/login` always act locally (they manage
+ Avante's own history / provider selection / CLI login); every other name is
+ handled by the agent.
+ - `/plan [mode]`: toggle ACP plan mode (or switch to a specific ACP mode)
+ - `/login [args]`: run the ACP agent CLI's native login flow in a terminal split
+   (Claude Code: `claude auth login`; `/login --console` for API billing)
+
 avante.SlashCommands                                      *avante.SlashCommands*
 
     Fields: ~
@@ -2496,7 +2521,7 @@ What is ACP?
 Before using ACP agents, ensure you have the required tools installed:
 
 - **For Gemini CLI**: Install the `gemini` CLI tool and set your `GEMINI_API_KEY`
-- **For Claude Code**: Install the `claude` CLI and the `claude-agent-acp` shim (`npm i -g @zed-industries/claude-agent-acp`); either log in with `claude auth login` or set `ANTHROPIC_API_KEY`
+- **For Claude Code**: Install the `claude` CLI and the `claude-agent-acp` shim (`npm i -g @agentclientprotocol/claude-agent-acp`; the old `@zed-industries` package is deprecated); either log in with `claude auth login` or set `ANTHROPIC_API_KEY`
 
 ACP vs Traditional Providers
 

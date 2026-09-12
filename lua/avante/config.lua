@@ -559,14 +559,16 @@ M._defaults = {
         NODE_NO_WARNINGS = "1",
         ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY"),
         ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL"),
-        -- `CLAUDE_CODE_EXECUTABLE` is what @zed-industries/claude-agent-acp reads; the ACP_* name is kept
+        -- `CLAUDE_CODE_EXECUTABLE` is what @agentclientprotocol/claude-agent-acp reads; the ACP_* name is kept
         -- for older adapters.
         CLAUDE_CODE_EXECUTABLE = vim.fn.exepath("claude"),
         ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE = vim.fn.exepath("claude"),
         -- The initial permission mode is NOT taken from the environment: claude-agent-acp reads
         -- `permissions.defaultMode` from Claude Code's settings.json ("default" | "acceptEdits" | "dontAsk" |
-        -- "plan" | "bypassPermissions"). "bypassPermissions" means the agent never asks, so avante's inline
-        -- permission buttons never show. Switch modes at runtime with <leader>am (:AvanteACPModes). See |avante-acp|.
+        -- "plan" | "auto" | "bypassPermissions"). The deprecated @zed-industries shim (0.23.x) rejects "auto";
+        -- upgrade it or override the mode per project. "bypassPermissions" means the agent never asks, so avante's
+        -- inline permission buttons never show. Switch modes at runtime with <leader>am (:AvanteACPModes).
+        -- See |avante-acp|.
       },
     },
     ["goose"] = {
