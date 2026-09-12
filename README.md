@@ -16,6 +16,12 @@
 
 [查看中文版](README_zh.md)
 
+> [!IMPORTANT]
+>
+> **This is a fork of [yetone/avante.nvim](https://github.com/yetone/avante.nvim)**, maintained at [ElliotLearnsThings/avante.nvim](https://github.com/ElliotLearnsThings/avante.nvim). It tracks upstream `main` and layers on a much deeper [Claude Code](https://docs.anthropic.com/en/docs/claude-code) integration over the [Agent Client Protocol (ACP)](https://agentclientprotocol.com): the agent reads and edits through your Neovim buffers, subagents and plan mode are rendered in the sidebar, Claude Code CLI sessions can be resumed from a picker, and the agent's own slash commands, terminals, MCP servers and images all work. Everything else (API providers, RAG, tools, Zen Mode) is unchanged upstream avante.
+>
+> See [What this fork adds](#what-this-fork-adds) for the full list and [Installing the fork](#installing-the-fork) for the one-line change to your plugin spec.
+
 > [!NOTE]
 >
 > 🥰 This project is undergoing rapid iterations, and many exciting features will be added successively. Stay tuned!
@@ -60,6 +66,66 @@ If you like this project, please consider supporting me on Patreon, as it helps 
 - **Many providers supported**: openai, anthropic, mistral, deepseek, ollama,
   llama-cpp, ...
 - **RAG (optional)**: you can with some extra configuration run a local RAG
+
+## What this fork adds
+
+All of the additions live in the ACP layer (`lua/avante/libs/acp_client.lua`, `lua/avante/llm.lua`, `lua/avante/acp_sessions.lua`, `lua/avante/history/render.lua`, `lua/avante/slashcommands.lua`) and are covered by specs under `tests/`. The Rust crates and every non-ACP provider are identical to upstream.
+
+### Claude Code as a first-class agent
+
+- **Zero-config login.** The default `claude-code` provider launches `@agentclientprotocol/claude-agent-acp` with your full environment, so the `claude` CLI finds its own login; no `ANTHROPIC_API_KEY` is required. `/login` opens the CLI's native login flow (`claude auth login`, or `/login --console` for API billing) in a terminal split, and "not logged in" or unsupported `permissions.defaultMode` errors from the shim are turned into messages that say what to do. See [Quick start: Claude Code over ACP](#quick-start-claude-code-over-acp).
+- **Subagents.** Claude Code `Task`/`Agent` calls are rendered as one collapsible block per subagent: agent type, prompt, streamed progress (nested tool calls with status, text and thoughts), terminal output and the final result. Permission requests raised inside a subagent stay attached to it, and a subagent's todo list no longer overwrites the main one.
+- **Plan mode.** `ExitPlanMode` shows the complete plan (never truncated) together with the agent's own approval labels ("Yes, and auto-accept edits" / "No, keep planning"); the plan stays visible after a rejection. `/plan` toggles plan mode, `/plan <mode>` switches to any mode the agent offers, and the winbar follows `current_mode_update`.
+- **Session browser.** `:AvanteACPSessions` (`<leader>aH`) lists the Claude Code CLI transcripts recorded for the current project under `~/.claude/projects/` and resumes one through ACP `session/load`. Chat histories bound to an agent session show an `[ACP claude-code:<id> resumable]` badge in `:AvanteHistory`, and reopening one re-attaches the agent without duplicating the transcript.
+- **Agent slash commands.** Commands advertised by the agent (`/compact`, `/context`, skills, plugin commands, ...) are registered with their argument hints and show up in nvim-cmp and blink completion; submitting one forwards the raw text to the agent. See [Slash Commands](#slash-commands--trigger).
+
+### Editor-native file access
+
+- The agent's `Read`, `Edit` and `Write` tools are served by Neovim through ACP `fs/read_text_file` and `fs/write_text_file`. Files that are open in a buffer are read from the buffer, unsaved changes included, and edits are applied to the buffer as a single undo step and then saved. Your cursor stays put, and neither the swap-file prompt nor the "file changed on disk" dialog fires. Files that are not open are written to disk directly.
+
+### ACP protocol coverage
+
+- **Terminals.** `terminal/create`, `terminal/output`, `terminal/wait_for_exit`, `terminal/kill` and `terminal/release` are implemented, plus the `_meta` terminal streaming that `claude-agent-acp` uses for its own `Bash` tool. Command output renders under the tool call, live while it runs.
+- **Prompt content.** Pasted images are sent as base64 image parts and selected files as embedded text resources when the agent advertises the matching `promptCapabilities`, with `resource_link` fallbacks otherwise.
+- **MCP servers** can be configured per ACP provider (keyed table or raw ACP list) and merged from [mcphub.nvim](https://github.com/ravitemer/mcphub.nvim). See [MCP servers for ACP agents](#mcp-servers-for-acp-agents).
+- **Turn handling.** `stopReason` values other than `end_turn` are surfaced in the chat; permission requests from parallel tool calls are queued and shown one at a time under the tool call they belong to; `:AvanteStop` answers every pending request with "cancelled"; tool calls that never completed are closed when the turn ends; messages typed while the agent works are queued and sent one per turn; only the new message is sent each turn instead of replaying history; a crashed shim reports its stderr and returns the sidebar to idle.
+
+### Fixes to upstream ACP behaviour
+
+- `current_mode_update` uses the spec field `currentModeId` (the legacy `modeId` is still accepted), so mode switches and plan approval are reflected in the UI.
+- `CLAUDE_CODE_EXECUTABLE` is passed to the shim; the ignored `ACP_PERMISSION_MODE` was dropped and the deprecated `@zed-industries` package name replaced.
+- `fs/write_text_file` failures are reported as JSON-RPC errors, malformed or unanswered requests never leave the agent hanging, `ERROR_CODES.PROTOCOL_ERROR` and `TIMEOUT_ERROR` are defined, and the spawned agent inherits `HOME`, `XDG_*`, `SSH_AUTH_SOCK` and friends instead of only `PATH`.
+
+Bug reports and pull requests for the behaviour listed above belong in [this repository](https://github.com/ElliotLearnsThings/avante.nvim/issues); anything else is best raised [upstream](https://github.com/yetone/avante.nvim/issues).
+
+## Installing the fork
+
+Point your plugin manager at `ElliotLearnsThings/avante.nvim` instead of `yetone/avante.nvim`; every other option in the [Installation](#installation) section applies unchanged. The fork publishes no binary releases of its own, but because the Rust crates are identical to upstream you can either download upstream's prebuilt libraries or compile them yourself:
+
+```lua
+{
+  "ElliotLearnsThings/avante.nvim",
+  branch = "main",
+  -- `./build.sh` downloads the matching prebuilt libraries from yetone/avante.nvim's releases.
+  -- Use "make" instead to compile the Rust crates locally (requires cargo).
+  build = "./build.sh",
+  event = "VeryLazy",
+  version = false,
+  ---@module 'avante'
+  ---@type avante.Config
+  opts = {
+    provider = "claude-code",
+  },
+  dependencies = {
+    "nvim-lua/plenary.nvim",
+    "MunifTanjim/nui.nvim",
+  },
+}
+```
+
+On Windows `Build.ps1` looks up releases for the repository named in your `origin` remote, which the fork does not have, so build from source there with `powershell -ExecutionPolicy Bypass -File Build.ps1 -BuildFromSource true`.
+
+Then install the Claude Code CLI and the ACP shim as described in [Quick start: Claude Code over ACP](#quick-start-claude-code-over-acp). The Zen Mode launcher in [`contrib/avante`](./contrib/avante) works as-is.
 
 ## Avante Zen Mode
 
@@ -809,8 +875,9 @@ Built-in slash commands for common operations:
 - `/lines <start>-<end> <question>` - Ask about specific lines
 - `/commit` - Generate commit message for changes
 - `/plan [mode]` - Toggle plan mode on the ACP agent session (e.g. Claude Code), or switch to a specific ACP mode
+- `/login [args]` - Run the ACP agent CLI's native login flow in a terminal split (Claude Code: `claude auth login`; `/login --console` for API billing). Use it when a prompt fails with "Authentication required"
 
-ACP agents (for example Claude Code through `claude-agent-acp`) can advertise their own commands (`/compact`, `/context`, `/model`, skills, plugin commands, ...). Avante registers them in `Config.slash_commands` with `source = "acp"` and replaces that set on every `available_commands_update`, so they show up in every completion source that reads `require("avante.utils").get_commands()` (the bundled nvim-cmp source, `blink.compat`, and `Kaiser-Yang/blink-cmp-avante`). Submitting an agent command sends the raw `/name args` text to the agent unchanged. If the agent advertises a name that collides with a built-in command, `/clear` and `/model` keep acting locally; every other name is handled by the agent.
+ACP agents (for example Claude Code through `claude-agent-acp`) can advertise their own commands (`/compact`, `/context`, `/model`, skills, plugin commands, ...). Avante registers them in `Config.slash_commands` with `source = "acp"` and replaces that set on every `available_commands_update`, so they show up in every completion source that reads `require("avante.utils").get_commands()` (the bundled nvim-cmp source, `blink.compat`, and `Kaiser-Yang/blink-cmp-avante`). Submitting an agent command sends the raw `/name args` text to the agent unchanged. If the agent advertises a name that collides with a built-in command, `/clear`, `/model` and `/login` keep acting locally; every other name is handled by the agent.
 
 #### Shortcuts (`#` trigger)
 
@@ -1160,15 +1227,19 @@ See `:h avante-acp` and [Custom Providers](https://github.com/yetone/avante.nvim
 ### Quick start: Claude Code over ACP
 
 1. Install the Claude Code CLI (`npm i -g @anthropic-ai/claude-code`) and log in once with `claude auth login` (or just run `claude` and follow the prompts).
-2. Install the ACP shim: `npm i -g @zed-industries/claude-agent-acp` (this provides the `claude-agent-acp` command that avante launches).
+2. Install the ACP shim: `npm i -g @agentclientprotocol/claude-agent-acp` (this provides the `claude-agent-acp` command that avante launches). The package was renamed from `@zed-industries/claude-agent-acp`, which is deprecated and frozen at 0.23.1; if you have the old one, run `npm uninstall -g @zed-industries/claude-agent-acp` first.
 3. Set `provider = "claude-code"` in your avante config.
 
 No `ANTHROPIC_API_KEY` is needed when the CLI is logged in: avante only forwards `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` to the shim if they are set in your environment, otherwise the CLI's own login is used.
 
-The default `acp_providers["claude-code"]` entry sets `ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE = vim.fn.exepath("claude")` and `ACP_PERMISSION_MODE = "bypassPermissions"`. Recent versions of the shim (0.23.x) no longer read these two variables; instead they honour:
+The default `acp_providers["claude-code"]` entry sets `CLAUDE_CODE_EXECUTABLE = vim.fn.exepath("claude")` (and the legacy `ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE` for very old shims). Current shims do not read `ACP_PERMISSION_MODE`; they honour:
 
 - `CLAUDE_CODE_EXECUTABLE`: absolute path of the `claude` binary to run (defaults to the CLI bundled with the shim's Claude Agent SDK).
-- `permissions.defaultMode` in your Claude settings (`~/.claude/settings.json`, `<cwd>/.claude/settings.json` or `.claude/settings.local.json`): the initial permission mode. Accepted values are `default`, `acceptEdits`, `dontAsk`, `plan` and `bypassPermissions` (alias `bypass`; not available when running as root unless `IS_SANDBOX` is set).
+- `permissions.defaultMode` in your Claude settings (`~/.claude/settings.json`, `<cwd>/.claude/settings.json` or `.claude/settings.local.json`): the initial permission mode. Accepted values are `default`, `acceptEdits`, `dontAsk`, `plan`, `auto` and `bypassPermissions` (alias `bypass`; not available when running as root unless `IS_SANDBOX` is set). `auto` falls back to `acceptEdits` for models that do not support Claude Code's auto mode. The deprecated `@zed-industries` shim (0.23.x) does not know `auto` and fails `session/new` with `Invalid permissions.defaultMode: auto`; upgrade to `@agentclientprotocol/claude-agent-acp`, or, if you must stay on the old shim, override the mode for the project in `<cwd>/.claude/settings.local.json`:
+
+  ```json
+  { "permissions": { "defaultMode": "default" } }
+  ```
 - `CLAUDE_CONFIG_DIR`: alternative Claude config directory, `MAX_THINKING_TOKENS`: thinking-token budget.
 
 Any of these can be set via the `env` table of the provider, e.g.:
@@ -1182,6 +1253,14 @@ acp_providers = {
 ```
 
 Once a session is running you can switch the agent's permission mode with `<leader>am` (`:AvanteACPModes`) and its model with `<leader>aM` (`:AvanteACPModels`). Set `behaviour.acp_follow_agent_locations = false` if you do not want avante to open files and jump to the lines the agent is editing.
+
+How the integration behaves while the agent works:
+
+- **File reads and edits go through your buffers.** The agent's `Read`/`Edit`/`Write` tools are served by Neovim: a file that is open in a buffer is read from the buffer (including unsaved changes) and edits are applied to the buffer and saved, so they are undoable (`u`), keep your cursor and never trigger the "file changed on disk" or swap-file dialogs. Files that are not open are written to disk directly.
+- **Permission prompts are answered one at a time.** When the agent runs several tool calls in parallel (for example one `Edit` per paragraph), their permission requests are queued and shown in order under the tool call they belong to; the agent waits for each answer. `<leader>aS` (`:AvanteStop`) cancels the turn and answers every pending request with "cancelled".
+- **Messages typed while the agent is working are queued** and sent, one per turn, once the current turn completes; if the turn fails or is cancelled the queued text is put back into the input box.
+- **Only the new message is sent** on each turn. The agent keeps the conversation in its own session, so earlier messages are not repeated (they are only handed over as context when a brand-new session is created for an existing chat).
+- If the shim process dies mid-turn the error (with the last lines of its stderr) is shown in the chat and the sidebar returns to an idle state instead of spinning forever.
 
 ### MCP servers for ACP agents
 

@@ -23,14 +23,18 @@
 ---Before using ACP agents, ensure you have the required tools installed:
 ---
 ---- **For Gemini CLI**: Install the `gemini` CLI tool and set your `GEMINI_API_KEY`
----- **For Claude Code**: Install the `claude` CLI and the `claude-agent-acp` shim (`npm i -g @zed-industries/claude-agent-acp`); either log in with `claude auth login` or set `ANTHROPIC_API_KEY`
+---- **For Claude Code**: Install the `claude` CLI and the `claude-agent-acp` shim (`npm i -g @agentclientprotocol/claude-agent-acp`; the old `@zed-industries` package is deprecated); either log in with `claude auth login` or set `ANTHROPIC_API_KEY`
 ---
 ---Permission mode (Claude Code)
 ---
----`@zed-industries/claude-agent-acp` takes its initial permission mode from Claude Code's own settings
+---`@agentclientprotocol/claude-agent-acp` takes its initial permission mode from Claude Code's own settings
 ---(`permissions.defaultMode` in `~/.claude/settings.json` or the project's `.claude/settings*.json`), not from
----the environment. Accepted values are `default`, `acceptEdits`, `dontAsk`, `plan` and `bypassPermissions`
----(alias `bypass`). With `bypassPermissions` the agent never sends `session/request_permission`, so avante's
+---the environment. Accepted values are `default`, `acceptEdits`, `dontAsk`, `plan`, `auto` and `bypassPermissions`
+---(alias `bypass`); `auto` falls back to `acceptEdits` for models without auto-mode support. The deprecated
+---`@zed-industries/claude-agent-acp` (frozen at 0.23.1) does not know `auto` and fails `session/new` with
+---"Invalid permissions.defaultMode: auto": upgrade the shim, or override the mode for the project in
+---`.claude/settings.local.json` (`{ "permissions": { "defaultMode": "default" } }`).
+---With `bypassPermissions` the agent never sends `session/request_permission`, so avante's
 ---inline permission buttons never appear; use `default` (and `behaviour.auto_approve_tool_permissions = false`)
 ---to be asked, or switch the mode at runtime with `:AvanteACPModes` / `<leader>am`.
 ---The binary is located via `CLAUDE_CODE_EXECUTABLE`; `CLAUDE_CONFIG_DIR` and `MAX_THINKING_TOKENS` are also honoured.
@@ -292,6 +296,10 @@ local Utils = require("avante.utils")
 ---@field config ACPConfig
 ---@field callbacks table<number, fun(result: table|nil, err: avante.acp.ACPError|nil)>
 ---@field pending_permissions table<number, boolean> ids of unanswered session/request_permission requests
+---@field permission_queue { id: number, tool_call: table, options: table[] }[] permission requests waiting to be shown
+---@field active_permission_id number|nil id of the permission request currently shown to the user
+---@field active_session_ids table<string, boolean> sessions created/loaded on this connection
+---@field fresh_session_ids table<string, boolean> sessions created on this connection that have not been prompted yet
 ---@field stderr_lines string[] last lines received on the agent's stderr
 ---@field terminals table<string, avante.acp.Terminal>
 ---@field terminal_counter integer
@@ -326,6 +334,7 @@ local LOG_SEPARATOR = string.rep("=", 80) .. "\n"
 ---@field on_write_file? fun(path: string, content: string, callback: fun(error: string|nil)): nil
 ---@field on_terminal_update? fun(terminal: avante.acp.Terminal): nil Called whenever terminal output or exit status changes
 ---@field on_error? fun(error: table)
+---@field on_auth_status_update? fun(status: table|nil) claude-agent-acp `_auth/status_update` payload
 
 ---@class ACPConfig
 ---@field transport_type "stdio" | "websocket" | "tcp"
@@ -365,6 +374,10 @@ function ACPClient:new(config)
     debug_log_file = nil,
     callbacks = {},
     pending_permissions = {},
+    -- session/request_permission requests are shown to the user one at a
+    -- time; the rest wait here in arrival order (see _dispatch_next_permission).
+    permission_queue = {},
+    active_permission_id = nil,
     stderr_lines = {},
     terminals = {},
     terminal_counter = 0,
@@ -378,6 +391,9 @@ function ACPClient:new(config)
     -- The agent only knows about sessions established over this connection,
     -- so a persisted session id must go through session/load before prompting.
     active_session_ids = {},
+    -- Sessions created (not loaded) on this connection whose first prompt
+    -- has not been sent yet; llm.lua hands such a session the chat context.
+    fresh_session_ids = {},
   }, { __index = self })
 
   client:_setup_transport()
@@ -474,6 +490,17 @@ function ACPClient:_format_spawn_failure(code, signal)
   return msg
 end
 
+---Build a human readable message for an agent process that died mid-session
+---@param code integer
+---@param signal integer
+---@return string
+function ACPClient:_format_unexpected_exit(code, signal)
+  local cmd = table.concat({ self.config.command or "?", unpack(self.config.args or {}) }, " ")
+  local msg = string.format("ACP agent [%s] exited unexpectedly with code %d (signal %d)", cmd, code, signal)
+  if #self.stderr_lines > 0 then msg = msg .. "\nstderr:\n" .. table.concat(self.stderr_lines, "\n") end
+  return msg
+end
+
 ---Fail every outstanding request callback with the given error
 ---@param err avante.acp.ACPError
 function ACPClient:_fail_pending_callbacks(err)
@@ -485,6 +512,32 @@ function ACPClient:_fail_pending_callbacks(err)
 end
 
 ---Create stdio transport layer
+---Build the environment for the agent process: Neovim's own environment with
+---the provider's `env` table layered on top.
+---
+---The agent must inherit the full environment (HOME, XDG_*, SSH_AUTH_SOCK,
+---proxy settings, ...). Claude Code, for one, locates its login and settings
+---through HOME; spawned with only PATH it reports "Not logged in" and every
+---prompt fails with `authRequired`.
+---@param config_env table<string, any>|nil provider `env` (nil values are skipped)
+---@param base_env table<string, string>|nil defaults to `vim.fn.environ()`
+---@return string[] `KEY=VALUE` entries for `uv.spawn`
+function ACPClient.build_spawn_env(config_env, base_env)
+  local merged = vim.deepcopy(base_env or vim.fn.environ())
+  if type(config_env) == "table" then
+    for k, v in pairs(config_env) do
+      if v ~= nil and v ~= vim.NIL then merged[k] = tostring(v) end
+    end
+  end
+  local keys = vim.tbl_keys(merged)
+  table.sort(keys)
+  local result = {}
+  for _, k in ipairs(keys) do
+    result[#result + 1] = k .. "=" .. tostring(merged[k])
+  end
+  return result
+end
+
 function ACPClient:_create_stdio_transport()
   local uv = vim.uv or vim.loop
 
@@ -523,19 +576,7 @@ function ACPClient:_create_stdio_transport()
     end
 
     local args = vim.deepcopy(self.config.args)
-    local env = self.config.env
-
-    -- Start with system environment and override with config env
-    local final_env = {}
-
-    local path = vim.fn.getenv("PATH")
-    if path then final_env[#final_env + 1] = "PATH=" .. path end
-
-    if env then
-      for k, v in pairs(env) do
-        final_env[#final_env + 1] = k .. "=" .. v
-      end
-    end
+    local final_env = ACPClient.build_spawn_env(self.config.env)
 
     ---@diagnostic disable-next-line: missing-fields
     local handle, pid = uv.spawn(self.config.command, {
@@ -545,19 +586,39 @@ function ACPClient:_create_stdio_transport()
     }, function(code, signal)
       Utils.debug("ACP agent exited with code " .. code .. " and signal " .. signal)
       local was_ready = self.state == "ready"
+      local stopping = self._stopping == true
+      self._stopping = nil
       self:_set_state("disconnected")
 
-      if code ~= 0 and not was_ready then
+      -- Any request still waiting for an answer (typically the in-flight
+      -- session/prompt) will never be answered by this process. Fail it so the
+      -- caller's on_stop runs and the sidebar does not stay "generating" forever.
+      local has_pending = next(self.callbacks) ~= nil
+      if (code ~= 0 and not was_ready) or has_pending then
+        local message
+        if stopping then
+          message = "ACP agent stopped"
+        elseif was_ready then
+          message = self:_format_unexpected_exit(code, signal)
+        else
+          message = self:_format_spawn_failure(code, signal)
+        end
         local err = self:_create_error(
           self.ERROR_CODES.PROTOCOL_ERROR,
-          self:_format_spawn_failure(code, signal),
+          message,
           { code = code, signal = signal, stderr = vim.deepcopy(self.stderr_lines) }
         )
         vim.schedule(function()
-          vim.notify(err.message, vim.log.levels.ERROR, { title = "Avante ACP" })
+          if not stopping then vim.notify(err.message, vim.log.levels.ERROR, { title = "Avante ACP" }) end
           self:_fail_pending_callbacks(err)
         end)
       end
+
+      -- Permission prompts and terminals belonging to the dead process are moot.
+      self.pending_permissions = {}
+      self.permission_queue = {}
+      self.active_permission_id = nil
+      self:kill_all_terminals()
 
       if transport_self.process then
         transport_self.process:close()
@@ -686,7 +747,18 @@ function ACPClient:_send_request(method, params, callback)
 
   local data = vim.json.encode(message)
   self:_debug_log("request: " .. data .. "\n" .. LOG_SEPARATOR)
-  self.transport:send(data)
+  local sent = self.transport and self.transport:send(data)
+  if sent == false then
+    -- The agent process is gone (stdin closed); nothing will ever answer this
+    -- request, so fail it right away instead of leaving the caller hanging.
+    self.callbacks[id] = nil
+    local err = self:_create_error(
+      self.ERROR_CODES.PROTOCOL_ERROR,
+      "ACP agent is not connected; could not send " .. method,
+      { method = method }
+    )
+    vim.schedule(function() callback(nil, err) end)
+  end
 end
 
 ---Send JSON-RPC notification
@@ -773,6 +845,13 @@ function ACPClient:_handle_notification(message_id, method, params)
     self:_handle_terminal_kill(message_id, params)
   elseif method == "terminal/release" then
     self:_handle_terminal_release(message_id, params)
+  elseif method == "_auth/status_update" then
+    -- claude-agent-acp extension: which identity the agent process runs as
+    -- ({ kind = "account"|"api_key"|"gateway"|"external"|"none", label = ..., account = {...} }).
+    -- Push-only and connection-scoped; kept for the UI and for /login hints.
+    self.auth_status = type(params) == "table" and params.authStatus or nil
+    local handler = self.config.handlers and self.config.handlers.on_auth_status_update
+    if handler then handler(self.auth_status) end
   else
     vim.notify("Unknown notification method: " .. method, vim.log.levels.WARN)
   end
@@ -830,32 +909,75 @@ function ACPClient:_handle_request_permission(message_id, params)
   local tool_call = params.toolCall
   local options = params.options
 
-  if not session_id or not tool_call then return end
-
-  if self.config.handlers and self.config.handlers.on_request_permission then
-    self.pending_permissions[message_id] = true
-    vim.schedule(function()
-      self.config.handlers.on_request_permission(
-        tool_call,
-        options,
-        function(option_id)
-          -- Ignore late answers for requests already resolved (e.g. by session/cancel)
-          if not self.pending_permissions[message_id] then return end
-          self.pending_permissions[message_id] = nil
-          if option_id == nil then
-            self:_send_result(message_id, { outcome = { outcome = "cancelled" } })
-            return
-          end
-          self:_send_result(message_id, {
-            outcome = {
-              outcome = "selected",
-              optionId = option_id,
-            },
-          })
-        end
-      )
-    end)
+  if not session_id or not tool_call then
+    -- Never leave a request unanswered: the agent would wait forever.
+    self:_send_error(message_id, "Invalid session/request_permission params", ACPClient.ERROR_CODES.INVALID_PARAMS)
+    return
   end
+
+  if not (self.config.handlers and self.config.handlers.on_request_permission) then
+    self:_send_error(
+      message_id,
+      "session/request_permission handler not configured",
+      ACPClient.ERROR_CODES.METHOD_NOT_FOUND
+    )
+    return
+  end
+
+  self.pending_permissions[message_id] = true
+  table.insert(self.permission_queue, { id = message_id, tool_call = tool_call, options = options or {} })
+  self:_dispatch_next_permission()
+end
+
+---Show the next queued session/request_permission to the user.
+---
+---Agents such as Claude Code issue several tool calls in parallel (e.g. one
+---Edit per paragraph), each with its own permission request. The confirm UI
+---can only display one prompt at a time, so requests are answered strictly
+---one after another; a prompt that is replaced before being answered would
+---otherwise never be resolved and the whole turn would hang.
+function ACPClient:_dispatch_next_permission()
+  if self.active_permission_id ~= nil then return end
+  local request = table.remove(self.permission_queue, 1)
+  -- Skip requests that were resolved (cancelled) while waiting in the queue
+  while request and not self.pending_permissions[request.id] do
+    request = table.remove(self.permission_queue, 1)
+  end
+  if not request then return end
+
+  local message_id = request.id
+  self.active_permission_id = message_id
+
+  local answered = false
+  local function answer(option_id)
+    if answered then return end
+    answered = true
+    local was_pending = self.pending_permissions[message_id] == true
+    self.pending_permissions[message_id] = nil
+    if self.active_permission_id == message_id then self.active_permission_id = nil end
+    -- Late answers for requests already resolved (e.g. by session/cancel) are ignored
+    if was_pending then
+      if option_id == nil then
+        self:_send_result(message_id, { outcome = { outcome = "cancelled" } })
+      else
+        self:_send_result(message_id, {
+          outcome = {
+            outcome = "selected",
+            optionId = option_id,
+          },
+        })
+      end
+    end
+    self:_dispatch_next_permission()
+  end
+
+  vim.schedule(function()
+    local ok, err = pcall(self.config.handlers.on_request_permission, request.tool_call, request.options, answer)
+    if not ok then
+      Utils.error("ACP permission handler failed: " .. tostring(err), { title = "Avante ACP" })
+      answer(nil)
+    end
+  end)
 end
 
 ---Answer every unanswered session/request_permission with `outcome = "cancelled"`
@@ -864,6 +986,8 @@ function ACPClient:_cancel_pending_permissions()
   local ids = vim.tbl_keys(self.pending_permissions)
   table.sort(ids)
   self.pending_permissions = {}
+  self.permission_queue = {}
+  self.active_permission_id = nil
   for _, id in ipairs(ids) do
     self:_send_result(id, { outcome = { outcome = "cancelled" } })
   end
@@ -884,13 +1008,28 @@ function ACPClient:_handle_read_text_file(message_id, params)
 
   if self.config.handlers and self.config.handlers.on_read_file then
     vim.schedule(function()
-      self.config.handlers.on_read_file(
+      local answered = false
+      local ok, err = pcall(
+        self.config.handlers.on_read_file,
         path,
         params.line ~= vim.NIL and params.line or nil,
         params.limit ~= vim.NIL and params.limit or nil,
-        function(content) self:_send_result(message_id, { content = content }) end,
-        function(err, code) self:_send_error(message_id, err or "Failed to read file", code) end
+        function(content)
+          if answered then return end
+          answered = true
+          self:_send_result(message_id, { content = content })
+        end,
+        function(err, code)
+          if answered then return end
+          answered = true
+          self:_send_error(message_id, err or "Failed to read file", code)
+        end
       )
+      -- A handler that throws must still produce a response or the agent hangs
+      if not ok and not answered then
+        answered = true
+        self:_send_error(message_id, "Failed to read file: " .. tostring(err), ACPClient.ERROR_CODES.INTERNAL_ERROR)
+      end
     end)
   else
     self:_send_error(message_id, "fs/read_text_file handler not configured", ACPClient.ERROR_CODES.METHOD_NOT_FOUND)
@@ -912,11 +1051,22 @@ function ACPClient:_handle_write_text_file(message_id, params)
 
   if self.config.handlers and self.config.handlers.on_write_file then
     vim.schedule(function()
-      self.config.handlers.on_write_file(
-        path,
-        content,
-        function(error) self:_send_result(message_id, error == nil and vim.NIL or error) end
-      )
+      local answered = false
+      local ok, err = pcall(self.config.handlers.on_write_file, path, content, function(error)
+        if answered then return end
+        answered = true
+        if error == nil or error == vim.NIL then
+          self:_send_result(message_id, vim.NIL)
+        else
+          -- A failed write is a JSON-RPC error, not a successful result carrying a string
+          self:_send_error(message_id, tostring(error), ACPClient.ERROR_CODES.INTERNAL_ERROR)
+        end
+      end)
+      -- A handler that throws must still produce a response or the agent hangs
+      if not ok and not answered then
+        answered = true
+        self:_send_error(message_id, "Failed to write file: " .. tostring(err), ACPClient.ERROR_CODES.INTERNAL_ERROR)
+      end
     end)
   else
     self:_send_error(message_id, "fs/write_text_file handler not configured", ACPClient.ERROR_CODES.METHOD_NOT_FOUND)
@@ -1312,8 +1462,12 @@ end
 ---Stop client
 function ACPClient:stop()
   self.pending_permissions = {}
+  self.permission_queue = {}
+  self.active_permission_id = nil
   self.active_session_ids = {}
   self:release_all_terminals()
+  -- Tell the exit handler this was requested so it fails pending callbacks quietly
+  self._stopping = true
   self.transport:stop()
   self:_close_debug_log()
   self.reconnect_count = 0
@@ -1481,6 +1635,58 @@ function ACPClient.normalize_mcp_servers(mcp_servers)
   return result
 end
 
+---Turn an agent error into something a user can act on.
+---
+---claude-agent-acp reports most startup failures as a bare "Internal error" with the real cause in
+---`data.details`. The most common one is an unsupported `permissions.defaultMode` in the user's Claude
+---settings (e.g. Claude Code's `auto` mode, which the deprecated 0.23.x shim does not know). The other
+---frequent one is `authRequired` (-32000): the agent's CLI is not logged in. Returns a copy of `err` whose
+---`message` carries the explanation; the original message is kept in `data.original_message`.
+---@param err avante.acp.ACPError
+---@return avante.acp.ACPError
+function ACPClient.describe_error(err)
+  if type(err) ~= "table" then return err end
+  local data = type(err.data) == "table" and err.data or nil
+  local details = data and data.details or nil
+  if type(details) ~= "string" or details == "" then details = nil end
+
+  local message
+  if err.code == ACPClient.ERROR_CODES.AUTH_REQUIRED then
+    if data and data.reason == "claude_subscription_not_supported" then
+      message = "The agent refused to bill a claude.ai subscription (it runs with --hide-claude-auth). "
+        .. "Log in with an API key or a Console account: run `/login --console` in the Avante input."
+    else
+      message = "The agent is not logged in (it reported: " .. tostring(err.message) .. "). "
+        .. "Run `/login` in the Avante input to open the CLI's login flow in a terminal "
+        .. "(for Claude Code that is `claude auth login`), then resend your message."
+    end
+  elseif details then
+    local mode = details:match("^Invalid permissions%.defaultMode:%s*(.-)%.?$")
+    if mode and mode ~= "" then
+      message = string.format(
+        'claude-agent-acp rejected `permissions.defaultMode = "%s"` from your Claude settings '
+          .. "(~/.claude/settings.json or the project's .claude/settings*.json). This happens with the deprecated "
+          .. "@zed-industries/claude-agent-acp shim (frozen at 0.23.1), which only knows default, acceptEdits, "
+          .. "dontAsk, plan and bypassPermissions. Fix: `npm uninstall -g @zed-industries/claude-agent-acp && "
+          .. "npm i -g @agentclientprotocol/claude-agent-acp`. Alternatively override the mode for this project in "
+          .. '.claude/settings.local.json ({ "permissions": { "defaultMode": "default" } }), then reopen avante.',
+        mode
+      )
+    else
+      message = tostring(err.message) .. ": " .. details
+    end
+  else
+    return err
+  end
+
+  local new_data = data and vim.deepcopy(data) or {}
+  new_data.original_message = err.message
+  return { code = err.code, message = message, data = new_data }
+end
+
+---@deprecated use `ACPClient.describe_error`
+ACPClient.describe_session_error = ACPClient.describe_error
+
 ---Create new session
 ---@param cwd string
 ---@param mcp_servers table[]?
@@ -1493,6 +1699,7 @@ function ACPClient:create_session(cwd, mcp_servers, callback)
     mcpServers = mcp_servers or {},
   }, function(result, err)
     if err then
+      err = ACPClient.describe_error(err)
       vim.schedule(function() vim.notify("Failed to create session: " .. err.message, vim.log.levels.ERROR) end)
       callback(nil, err)
       return

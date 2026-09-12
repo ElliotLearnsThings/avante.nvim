@@ -23,10 +23,12 @@
 --- unchanged.
 ---
 --- Precedence when an agent advertises a command with the same name as a
---- built-in one: `/clear` and `/model` always act locally (they manage
---- Avante's own history / provider selection); every other name is handled
---- by the agent.
+--- built-in one: `/clear`, `/model` and `/login` always act locally (they manage
+--- Avante's own history / provider selection / CLI login); every other name is
+--- handled by the agent.
 --- - `/plan [mode]`: toggle ACP plan mode (or switch to a specific ACP mode)
+--- - `/login [args]`: run the ACP agent CLI's native login flow in a terminal split
+---   (Claude Code: `claude auth login`; `/login --console` for API billing)
 ---@brief ]]
 
 ---@class avante.SlashCommands
@@ -83,7 +85,131 @@ local builtin_commands = {
     details = "Toggle plan mode on the ACP agent session.\n/plan            toggle plan mode\n/plan <mode>     switch to a specific mode (e.g. default, acceptEdits)",
     name = "plan",
   },
+  {
+    shorthelp = "Log in to the ACP agent's CLI (Claude Code: `claude auth login`)",
+    description = "/login [args]",
+    details = "Run the ACP agent CLI's native login flow in a terminal split.\n"
+      .. "/login            claude.ai subscription login (Claude Code)\n"
+      .. "/login --console  Anthropic Console (API billing) login",
+    name = "login",
+  },
 }
+
+---Split `/login` arguments into a list.
+---@param args string|nil
+---@return string[]
+local function split_args(args)
+  local result = {}
+  for _, part in ipairs(vim.split(vim.trim(args or ""), "%s+")) do
+    if part ~= "" then table.insert(result, part) end
+  end
+  return result
+end
+
+---Work out which command implements the login flow for the active ACP provider.
+---
+---Preference order:
+--- 1. a `terminal`-type entry in the agent's advertised `authMethods` (ACP
+---    `initialize` result), run as the agent command plus the method's args, or
+---    the `_meta["terminal-auth"]` command when the agent provides one;
+--- 2. for Claude Code (`claude-agent-acp`), the CLI's own `claude auth login`,
+---    using the same executable the shim is configured with;
+--- 3. nothing, with a reason.
+---@param provider_name string|nil
+---@param acp_provider table|nil the `acp_providers[provider_name]` entry
+---@param acp_client avante.acp.ACPClient|nil the sidebar's live client, if any
+---@param args string|nil extra arguments typed after `/login`
+---@return string[]|nil cmd
+---@return string|nil reason why no command is available
+function M.resolve_login_command(provider_name, acp_provider, acp_client, args)
+  if type(acp_provider) ~= "table" then
+    return nil, "/login is only available with ACP providers (e.g. claude-code)"
+  end
+  local extra = split_args(args)
+
+  local methods = acp_client and acp_client.auth_methods or nil
+  if type(methods) == "table" then
+    for _, method in ipairs(methods) do
+      if type(method) == "table" and method.type == "terminal" then
+        local meta = type(method._meta) == "table" and method._meta["terminal-auth"] or nil
+        local cmd
+        if type(meta) == "table" and type(meta.command) == "string" then
+          cmd = { meta.command }
+          vim.list_extend(cmd, type(meta.args) == "table" and meta.args or {})
+        elseif type(acp_provider.command) == "string" then
+          cmd = { acp_provider.command }
+          vim.list_extend(cmd, type(acp_provider.args) == "table" and acp_provider.args or {})
+          vim.list_extend(cmd, type(method.args) == "table" and method.args or {})
+        end
+        if cmd then
+          vim.list_extend(cmd, extra)
+          return cmd, nil
+        end
+      end
+    end
+  end
+
+  local command = tostring(acp_provider.command or "")
+  if provider_name == "claude-code" or command:find("claude%-agent%-acp") then
+    local env = type(acp_provider.env) == "table" and acp_provider.env or {}
+    local exe = env.CLAUDE_CODE_EXECUTABLE or env.ACP_PATH_TO_CLAUDE_CODE_EXECUTABLE
+    if type(exe) ~= "string" or exe == "" then exe = vim.fn.exepath("claude") end
+    if exe == "" then exe = "claude" end
+    local cmd = { exe, "auth", "login" }
+    vim.list_extend(cmd, extra)
+    return cmd, nil
+  end
+
+  return nil,
+    "No login flow is known for ACP provider '"
+      .. tostring(provider_name)
+      .. "'; log in with its CLI in a terminal and resend your message."
+end
+
+---Run `cmd` in a terminal split so the user can complete an interactive login
+---(browser hand-off, pasted code, ...). The split closes itself on success.
+---@param cmd string[]
+---@param env table<string, string>|nil extra environment for the process
+function M.open_login_terminal(cmd, env)
+  local Utils = require("avante.utils")
+  local api = vim.api
+  local buf = api.nvim_create_buf(false, true)
+  vim.cmd("botright 15split")
+  local win = api.nvim_get_current_win()
+  api.nvim_win_set_buf(win, buf)
+
+  local job_env = {}
+  for k, v in pairs(env or {}) do
+    if type(v) == "string" then job_env[k] = v end
+  end
+
+  local opts = {
+    env = next(job_env) ~= nil and job_env or nil,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        if code == 0 then
+          Utils.info("Login finished. Resend your message to continue.")
+          if api.nvim_win_is_valid(win) then pcall(api.nvim_win_close, win, true) end
+        else
+          Utils.warn("Login exited with code " .. tostring(code) .. "; see the terminal for details.")
+        end
+      end)
+    end,
+  }
+  local job
+  if vim.fn.has("nvim-0.11") == 1 then
+    opts.term = true
+    job = vim.fn.jobstart(cmd, opts)
+  else
+    job = vim.fn.termopen(cmd, opts)
+  end
+  if job <= 0 then
+    Utils.error("Failed to start login command: " .. table.concat(cmd, " "))
+    if api.nvim_win_is_valid(win) then pcall(api.nvim_win_close, win, true) end
+    return
+  end
+  vim.cmd("startinsert")
+end
 
 ---@param commands AvanteSlashCommand[]
 ---@return string
@@ -123,6 +249,18 @@ local callbacks = {
     end
     if cb then cb("") end
   end,
+  login = function(sidebar, args, cb)
+    local Config = require("avante.config")
+    local acp_provider = Config.acp_providers[Config.provider]
+    local acp_client = type(sidebar) == "table" and sidebar.acp_client or nil
+    local cmd, reason = M.resolve_login_command(Config.provider, acp_provider, acp_client, args)
+    if not cmd then
+      require("avante.utils").warn(reason or "/login is not available")
+    else
+      M.open_login_terminal(cmd, acp_provider and acp_provider.env or nil)
+    end
+    if cb then cb("") end
+  end,
   plan = function(_, args, cb)
     local Config = require("avante.config")
     if not Config.acp_providers[Config.provider] then
@@ -143,7 +281,7 @@ local callbacks = {
 --- Built-in commands that keep acting locally even if an ACP agent advertises
 --- a command with the same name.
 ---@type table<string, boolean>
-M.LOCAL_PRECEDENCE = { clear = true, model = true }
+M.LOCAL_PRECEDENCE = { clear = true, model = true, login = true }
 
 ---@param command AvanteSlashCommand
 ---@return boolean
@@ -164,9 +302,11 @@ end
 ---@param command avante.acp.AvailableCommand
 ---@return AvanteSlashCommand
 function M.from_acp_command(command)
-  local hint = command.input and command.input.hint or nil
-  if hint == "" then hint = nil end
-  local description = command.description or ""
+  -- JSON `null` arrives as `vim.NIL` (a userdata), so type-check instead of
+  -- relying on truthiness: newer shims send `input: null` for plain commands.
+  local hint = type(command.input) == "table" and command.input.hint or nil
+  if type(hint) ~= "string" or hint == "" then hint = nil end
+  local description = type(command.description) == "string" and command.description or ""
   local details = description
   if hint then details = (details ~= "" and (details .. "\n") or "") .. "/" .. command.name .. " " .. hint end
   return {

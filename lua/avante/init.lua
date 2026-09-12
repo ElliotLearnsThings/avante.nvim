@@ -15,13 +15,23 @@
 ---   and Kimi CLI.
 --- - Optional RAG service and web-search tools.
 ---
+--- This is the ElliotLearnsThings/avante.nvim fork of yetone/avante.nvim. It
+--- tracks upstream and adds a deeper Claude Code integration over ACP: file
+--- reads and edits served from Neovim buffers, subagent and plan-mode
+--- rendering with `/plan`, a Claude Code session browser (|:AvanteACPSessions|),
+--- agent-provided slash commands and `/login`, terminals, MCP servers and image
+--- prompts. See |avante-acp| and the "What this fork adds" section of the README.
+---
 ---@brief ]]
 ---@toc avante-contents
 ---
 ---@mod avante-installation Installation
 ---
 ---@brief [[
----See the official README at https://github.com/yetone/avante.nvim for installation instructions.
+---See the README at https://github.com/ElliotLearnsThings/avante.nvim for
+---installation instructions; its "Installing the fork" section covers the plugin
+---spec and how to obtain the Rust libraries. The upstream project lives at
+---https://github.com/yetone/avante.nvim.
 ---@brief ]]
 ---
 ---@mod avante-requirements Requirements

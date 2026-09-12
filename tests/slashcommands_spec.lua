@@ -176,3 +176,56 @@ describe("slashcommands", function()
     assert.equals("", cb_args)
   end)
 end)
+
+
+describe("slashcommands /login", function()
+  it("is a built-in command that keeps local precedence over agent commands", function()
+    local names = vim.tbl_map(function(c) return c.name end, SlashCommands.get_builtin_commands())
+    assert.is_true(vim.tbl_contains(names, "login"))
+    assert.is_true(SlashCommands.LOCAL_PRECEDENCE.login)
+  end)
+
+  it("refuses non-ACP providers", function()
+    local cmd, reason = SlashCommands.resolve_login_command("claude", nil, nil, "")
+    assert.is_nil(cmd)
+    assert.truthy(reason:find("only available with ACP providers", 1, true))
+  end)
+
+  it("prefers a terminal auth method advertised by the agent", function()
+    local client = {
+      auth_methods = {
+        { id = "gateway", type = "gateway" },
+        { id = "claude-login", type = "terminal", args = { "--cli" } },
+      },
+    }
+    local cmd = SlashCommands.resolve_login_command("claude-code", { command = "claude-agent-acp", args = {} }, client, "")
+    assert.same({ "claude-agent-acp", "--cli" }, cmd)
+  end)
+
+  it("uses the _meta terminal-auth command when the agent provides one", function()
+    local client = {
+      auth_methods = {
+        {
+          id = "claude-login",
+          type = "terminal",
+          args = { "--cli" },
+          _meta = { ["terminal-auth"] = { command = "/usr/bin/node", args = { "/x/index.js", "--cli" } } },
+        },
+      },
+    }
+    local cmd = SlashCommands.resolve_login_command("claude-code", { command = "claude-agent-acp" }, client, "--sso")
+    assert.same({ "/usr/bin/node", "/x/index.js", "--cli", "--sso" }, cmd)
+  end)
+
+  it("falls back to `claude auth login` for Claude Code, honouring CLAUDE_CODE_EXECUTABLE", function()
+    local provider = { command = "claude-agent-acp", env = { CLAUDE_CODE_EXECUTABLE = "/opt/claude" } }
+    local cmd = SlashCommands.resolve_login_command("claude-code", provider, { auth_methods = {} }, " --console ")
+    assert.same({ "/opt/claude", "auth", "login", "--console" }, cmd)
+  end)
+
+  it("reports unknown providers without a login flow", function()
+    local cmd, reason = SlashCommands.resolve_login_command("goose", { command = "goose", args = { "acp" } }, nil, "")
+    assert.is_nil(cmd)
+    assert.truthy(reason:find("goose", 1, true))
+  end)
+end)

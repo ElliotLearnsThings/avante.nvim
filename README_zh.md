@@ -16,6 +16,12 @@
 
 [View in English](README.md)
 
+> [!IMPORTANT]
+>
+> 本仓库是 [yetone/avante.nvim](https://github.com/yetone/avante.nvim) 的一个分支（fork），托管在 [ElliotLearnsThings/avante.nvim](https://github.com/ElliotLearnsThings/avante.nvim)。它跟踪上游 `main` 分支，并在此基础上深度集成了通过 [Agent Client Protocol (ACP)](https://agentclientprotocol.com) 接入的 [Claude Code](https://docs.anthropic.com/en/docs/claude-code)：Agent 直接读写你的 Neovim 缓冲区、侧边栏渲染子 Agent 与计划模式、可从选择器恢复 Claude Code CLI 会话，并支持 Agent 自带的斜杠命令、终端、MCP 服务器和图片。其余部分（API 提供者、RAG、工具、Zen 模式）与上游完全一致。
+>
+> 完整说明见英文 README 中的 [What this fork adds](README.md#what-this-fork-adds) 与 [Installing the fork](README.md#installing-the-fork)。
+
 > [!NOTE]
 >
 > 🥰 该项目正在快速迭代中，许多令人兴奋的功能将陆续添加。敬请期待！

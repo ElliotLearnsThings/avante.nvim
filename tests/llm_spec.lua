@@ -547,3 +547,295 @@ describe("ACP subagent terminal output", function()
     client:stop()
   end)
 end)
+
+describe("ACP file system handlers", function()
+  local api = vim.api
+  local tmp_dir
+
+  local function read_disk(path)
+    local file = assert(io.open(path, "rb"))
+    local content = file:read("*a")
+    file:close()
+    return content
+  end
+
+  local function write_disk(path, content)
+    vim.fn.mkdir(vim.fs.dirname(path), "p")
+    local file = assert(io.open(path, "wb"))
+    file:write(content)
+    file:close()
+  end
+
+  before_each(function()
+    tmp_dir = vim.fn.tempname()
+    vim.fn.mkdir(tmp_dir, "p")
+    vim.o.swapfile = false
+  end)
+
+  after_each(function()
+    for _, bufnr in ipairs(api.nvim_list_bufs()) do
+      if api.nvim_buf_get_name(bufnr):find(tmp_dir, 1, true) then pcall(api.nvim_buf_delete, bufnr, { force = true }) end
+    end
+    vim.fn.delete(tmp_dir, "rf")
+  end)
+
+  it("reads a file from disk with its trailing newline", function()
+    local path = tmp_dir .. "/a.txt"
+    write_disk(path, "one\ntwo\n")
+    assert.equals("one\ntwo\n", llm.acp_read_text_file(path))
+    write_disk(path, "one\ntwo")
+    assert.equals("one\ntwo", llm.acp_read_text_file(path))
+  end)
+
+  it("reports ENOENT for a missing file", function()
+    local content, err, errname = llm.acp_read_text_file(tmp_dir .. "/missing.txt")
+    assert.is_nil(content)
+    assert.is_not_nil(err)
+    assert.equals("ENOENT", errname)
+  end)
+
+  it("honours 1-based line and limit", function()
+    local path = tmp_dir .. "/b.txt"
+    write_disk(path, "one\ntwo\nthree\nfour\n")
+    assert.equals("two\nthree\n", llm.acp_read_text_file(path, 2, 2))
+    assert.equals("three\nfour\n", llm.acp_read_text_file(path, 3, nil))
+    assert.equals("one\n", llm.acp_read_text_file(path, nil, 1))
+    assert.equals("four\n", llm.acp_read_text_file(path, 4, 10))
+  end)
+
+  it("prefers the unsaved buffer content and restores the final newline", function()
+    local path = tmp_dir .. "/c.md"
+    write_disk(path, "one\ntwo\nthree\n")
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    local bufnr = api.nvim_get_current_buf()
+    api.nvim_buf_set_lines(bufnr, 1, 2, false, { "two (edited)" })
+    assert.is_true(vim.bo[bufnr].modified)
+    assert.equals("one\ntwo (edited)\nthree\n", llm.acp_read_text_file(path))
+    assert.equals("two (edited)\n", llm.acp_read_text_file(path, 2, 1))
+  end)
+
+  it("writes through a modified buffer: no E37, undoable, cursor kept, saved to disk", function()
+    local path = tmp_dir .. "/d.md"
+    write_disk(path, "one\ntwo\nthree\n")
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    local bufnr = api.nvim_get_current_buf()
+    -- the user is editing the paragraph while the agent edits the same file
+    api.nvim_buf_set_lines(bufnr, 1, 2, false, { "two (edited)" })
+    api.nvim_win_set_cursor(0, { 3, 2 })
+
+    local err = llm.acp_write_text_file(path, "one\ntwo (edited)\nthree\nfour\n")
+    assert.is_nil(err)
+    assert.same({ "one", "two (edited)", "three", "four" }, api.nvim_buf_get_lines(bufnr, 0, -1, false))
+    assert.is_false(vim.bo[bufnr].modified)
+    assert.equals("one\ntwo (edited)\nthree\nfour\n", read_disk(path))
+    assert.same({ 3, 2 }, api.nvim_win_get_cursor(0))
+
+    -- the agent's edit is a normal undo step
+    vim.cmd("silent undo")
+    assert.same({ "one", "two (edited)", "three" }, api.nvim_buf_get_lines(bufnr, 0, -1, false))
+  end)
+
+  it("writes an unloaded file to disk, creating parent directories", function()
+    local path = tmp_dir .. "/nested/dir/e.txt"
+    local err = llm.acp_write_text_file(path, "hello\n")
+    assert.is_nil(err)
+    assert.equals("hello\n", read_disk(path))
+  end)
+
+  it("returns an error instead of throwing when the write fails", function()
+    local err = llm.acp_write_text_file(tmp_dir, "hello\n")
+    assert.is_not_nil(err)
+  end)
+end)
+
+describe("ACP prompt: only unsent user messages are forwarded", function()
+  local ACPClient = require("avante.libs.acp_client")
+  local History = require("avante.history")
+  local stub = require("luassert.stub")
+  local Config = require("avante.config")
+  local setup_transport_stub
+
+  local function make_client()
+    local client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+    client.agent_capabilities = { loadSession = true, promptCapabilities = {} }
+    client.prompt_capabilities = {}
+    local sent
+    client.transport = {
+      send = function(_, data)
+        local decoded = vim.json.decode(data)
+        if decoded.method == "session/prompt" then sent = decoded.params.prompt end
+        return true
+      end,
+      start = function() end,
+      stop = function() end,
+    }
+    client.state = "ready"
+    return client, function() return sent end
+  end
+
+  before_each(function()
+    setup_transport_stub = stub(ACPClient, "_setup_transport")
+    Config.provider = "claude-code"
+  end)
+
+  after_each(function() setup_transport_stub:revert() end)
+
+  it("_get_unsent_acp_user_messages returns the trailing unsent submissions", function()
+    local old = History.Message:new("user", "old", { is_user_submission = true })
+    old.acp_sent = true
+    local answer = History.Message:new("assistant", "answer")
+    local new1 = History.Message:new("user", "new 1", { is_user_submission = true })
+    local new2 = History.Message:new("user", "new 2", { is_user_submission = true })
+    local pending = llm._get_unsent_acp_user_messages({ old, answer, new1, new2 })
+    assert.same({ "new 1", "new 2" }, vim.tbl_map(function(m) return m.message.content end, pending))
+    new1.acp_sent = true
+    new2.acp_sent = true
+    assert.same({}, llm._get_unsent_acp_user_messages({ old, answer, new1, new2 }))
+  end)
+
+  it("sends only the new submission on an existing session and marks it sent", function()
+    local client, sent = make_client()
+    local old = History.Message:new("user", "old question", { is_user_submission = true })
+    old.acp_sent = true
+    local answer = History.Message:new("assistant", "old answer")
+    local new = History.Message:new("user", "new question", { is_user_submission = true })
+
+    llm._continue_stream_acp({
+      acp_session_id = "session-1",
+      history_messages = { old, answer, new },
+      on_start = function() end,
+      on_stop = function() end,
+    }, client, "session-1")
+
+    local prompt = sent()
+    assert.is_not_nil(prompt)
+    assert.equals(1, #prompt)
+    assert.equals("new question", prompt[1].text)
+    assert.is_true(new.acp_sent)
+  end)
+
+  it("gives a brand-new session the earlier user messages as context, once", function()
+    local client, sent = make_client()
+    local old = History.Message:new("user", "old question", { is_user_submission = true })
+    old.acp_sent = true
+    local answer = History.Message:new("assistant", "old answer")
+    local new = History.Message:new("user", "new question", { is_user_submission = true })
+
+    local opts = {
+      acp_session_id = "session-2",
+      history_messages = { old, answer, new },
+      on_start = function() end,
+      on_stop = function() end,
+    }
+    rawset(opts, "_acp_new_session", true)
+    llm._continue_stream_acp(opts, client, "session-2")
+
+    local texts = vim.tbl_map(function(p) return p.text end, sent())
+    assert.same({
+      "<previous_user_message>old question</previous_user_message>",
+      "<system_context>Continuing from previous session with 1 recent user messages</system_context>",
+      "new question",
+    }, texts)
+  end)
+
+  it("falls back to the last user message when nothing is pending", function()
+    local client, sent = make_client()
+    local only = History.Message:new("user", "retry me", { is_user_submission = true })
+    only.acp_sent = true
+    llm._continue_stream_acp({
+      acp_session_id = "session-3",
+      history_messages = { only },
+      on_start = function() end,
+      on_stop = function() end,
+    }, client, "session-3")
+    assert.equals("retry me", sent()[1].text)
+  end)
+end)
+
+describe("ACP turn end finalizes dangling tool calls", function()
+  local ACPClient = require("avante.libs.acp_client")
+  local stub = require("luassert.stub")
+  local Config = require("avante.config")
+  local setup_transport_stub, connect_stub
+  local saved_provider, saved_acp_providers
+
+  before_each(function()
+    saved_provider, saved_acp_providers = Config.provider, Config.acp_providers
+    Config.provider = "claude-code"
+    Config.acp_providers = { ["claude-code"] = { command = "fake-acp", args = {}, env = {} } }
+    setup_transport_stub = stub(ACPClient, "_setup_transport")
+    connect_stub = stub(ACPClient, "connect")
+  end)
+
+  after_each(function()
+    setup_transport_stub:revert()
+    connect_stub:revert()
+    Config.provider, Config.acp_providers = saved_provider, saved_acp_providers
+  end)
+
+  it("closes tool calls that never completed when the turn is cancelled", function()
+    local added = {}
+    local opts = {
+      just_connect_acp_client = true,
+      on_messages_add = function(messages)
+        for _, m in ipairs(messages) do
+          table.insert(added, m)
+        end
+      end,
+      on_start = function() end,
+      on_stop = function() end,
+    }
+    llm._stream_acp(opts)
+    local client = connect_stub.calls[1].refs[1]
+    client.config.handlers.on_session_update({
+      sessionUpdate = "tool_call",
+      toolCallId = "edit-1",
+      title = "Edit",
+      kind = "edit",
+      status = "in_progress",
+    })
+    local tool_message = added[#added]
+    assert.is_true(tool_message.is_calling)
+
+    local finalize = rawget(opts, "_acp_finalize_tool_calls")
+    assert.is_function(finalize)
+    finalize("cancelled")
+
+    assert.is_false(tool_message.is_calling)
+    assert.equals("generated", tool_message.state)
+    assert.equals("cancelled", tool_message.acp_tool_call.status)
+    local result = added[#added]
+    assert.equals("tool_result", result.message.content[1].type)
+    assert.equals("edit-1", result.message.content[1].tool_use_id)
+    assert.is_true(result.message.content[1].is_user_declined)
+
+    -- a second call finds nothing left to close
+    local count = #added
+    finalize("complete")
+    assert.equals(count, #added)
+    client.transport = { stop = function() end }
+    client:stop()
+  end)
+
+  it("reuses the agent process but installs fresh handlers for each turn", function()
+    local first_opts = { just_connect_acp_client = true, on_start = function() end, on_stop = function() end }
+    llm._stream_acp(first_opts)
+    local client = connect_stub.calls[1].refs[1]
+    local first_handlers = client.config.handlers
+    client.active_session_ids["session-9"] = true
+
+    local second_opts = {
+      just_connect_acp_client = true,
+      acp_client = client,
+      acp_session_id = "session-9",
+      on_start = function() end,
+      on_stop = function() end,
+    }
+    llm._stream_acp(second_opts)
+    assert.equals(1, #connect_stub.calls, "no second agent process is spawned")
+    assert.is_not.equal(first_handlers, client.config.handlers)
+    assert.is_function(rawget(second_opts, "_acp_finalize_tool_calls"))
+    client.transport = { stop = function() end }
+    client:stop()
+  end)
+end)

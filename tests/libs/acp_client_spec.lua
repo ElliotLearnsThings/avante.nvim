@@ -566,6 +566,140 @@ describe("ACPClient", function()
     end)
   end)
 
+  describe("build_spawn_env", function()
+    it("inherits the base environment and layers the provider env on top", function()
+      local env = ACPClient.build_spawn_env(
+        { CLAUDE_CODE_EXECUTABLE = "/usr/local/bin/claude", PATH = "/override", MISSING = nil, NUM = 1 },
+        { HOME = "/Users/me", PATH = "/usr/bin", SSH_AUTH_SOCK = "/tmp/agent" }
+      )
+      assert.same({
+        "CLAUDE_CODE_EXECUTABLE=/usr/local/bin/claude",
+        "HOME=/Users/me",
+        "NUM=1",
+        "PATH=/override",
+        "SSH_AUTH_SOCK=/tmp/agent",
+      }, env)
+    end)
+
+    it("skips vim.NIL values and tolerates a nil provider env", function()
+      assert.same({ "HOME=/h" }, ACPClient.build_spawn_env({ KEY = vim.NIL }, { HOME = "/h" }))
+      assert.same({ "HOME=/h" }, ACPClient.build_spawn_env(nil, { HOME = "/h" }))
+    end)
+
+    it("defaults to the running Neovim environment", function()
+      local env = ACPClient.build_spawn_env({ AVANTE_SPEC_MARKER = "1" })
+      local has_home, has_marker = false, false
+      for _, entry in ipairs(env) do
+        if entry:match("^HOME=") then has_home = true end
+        if entry == "AVANTE_SPEC_MARKER=1" then has_marker = true end
+      end
+      assert.is_true(has_home)
+      assert.is_true(has_marker)
+    end)
+  end)
+
+  describe("describe_error", function()
+    it("explains authRequired with the /login hint", function()
+      local err = ACPClient.describe_error({ code = -32000, message = "Authentication required" })
+      assert.equals(-32000, err.code)
+      assert.truthy(err.message:find("not logged in", 1, true))
+      assert.truthy(err.message:find("/login", 1, true))
+      assert.truthy(err.message:find("claude auth login", 1, true))
+      assert.equals("Authentication required", err.data.original_message)
+    end)
+
+    it("points subscription refusals at a Console login", function()
+      local err = ACPClient.describe_error({
+        code = -32000,
+        message = "Authentication required",
+        data = { reason = "claude_subscription_not_supported" },
+      })
+      assert.truthy(err.message:find("/login --console", 1, true))
+    end)
+  end)
+
+  describe("_auth/status_update", function()
+    it("stores the agent's auth status and forwards it to the handler", function()
+      local seen
+      local client = ACPClient:new({
+        transport_type = "stdio",
+        handlers = { on_auth_status_update = function(status) seen = status end },
+      })
+      client.state = "ready"
+      local status = { kind = "account", label = "Claude Max", account = { email = "me@example.com" } }
+      client:_handle_message({ jsonrpc = "2.0", method = "_auth/status_update", params = { authStatus = status } })
+      assert.same(status, client.auth_status)
+      assert.same(status, seen)
+    end)
+  end)
+
+  describe("describe_session_error", function()
+    it("explains an unsupported permissions.defaultMode", function()
+      local err = ACPClient.describe_session_error({
+        code = -32603,
+        message = "Internal error",
+        data = { details = "Invalid permissions.defaultMode: auto." },
+      })
+      assert.equals(-32603, err.code)
+      assert.truthy(err.message:find('permissions.defaultMode = "auto"', 1, true))
+      assert.truthy(err.message:find("@agentclientprotocol/claude-agent-acp", 1, true))
+      assert.truthy(err.message:find(".claude/settings.local.json", 1, true))
+      assert.equals("Internal error", err.data.original_message)
+      assert.equals("Invalid permissions.defaultMode: auto.", err.data.details)
+    end)
+
+    it("appends other details to the message", function()
+      local err = ACPClient.describe_session_error({
+        code = -32603,
+        message = "Internal error",
+        data = { details = "spawn claude ENOENT" },
+      })
+      assert.equals("Internal error: spawn claude ENOENT", err.message)
+    end)
+
+    it("returns errors without details untouched", function()
+      local err = { code = -32601, message = "Method not found" }
+      assert.equals(err, ACPClient.describe_session_error(err))
+      assert.equals("nope", ACPClient.describe_session_error("nope"))
+    end)
+
+    it("is applied to session/new failures", function()
+      local client
+      local got_err
+      local mock_transport = {
+        send = function(_self, data)
+          local decoded = vim.json.decode(data)
+          if decoded.method == "session/new" then
+            vim.schedule(
+              function()
+                client:_handle_message({
+                  jsonrpc = "2.0",
+                  id = decoded.id,
+                  error = {
+                    code = -32603,
+                    message = "Internal error",
+                    data = { details = "Invalid permissions.defaultMode: auto." },
+                  },
+                })
+              end
+            )
+          end
+        end,
+        start = function(_self, _on_message) end,
+        stop = function(_self) end,
+      }
+      client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+      client.transport = mock_transport
+      client.state = "ready"
+
+      client:create_session("/tmp/test", nil, function(_sid, err) got_err = err end)
+      vim.wait(200, function() return got_err ~= nil end)
+
+      assert.is_not_nil(got_err)
+      assert.truthy(got_err.message:find("claude-agent-acp rejected", 1, true))
+    end)
+  end)
+
   describe("normalize_mcp_servers", function()
     it("returns an empty list for nil or empty input", function()
       assert.same({}, ACPClient.normalize_mcp_servers(nil))
@@ -1025,5 +1159,202 @@ describe("ACPClient mode updates", function()
     assert.equals("s", sent.params.sessionId)
     assert.equals("plan", client:get_current_mode())
     assert.is_not_nil(result_options)
+  end)
+end)
+
+describe("ACPClient request/response robustness", function()
+  local stub = require("luassert.stub")
+  local schedule_stub
+  local setup_transport_stub
+
+  before_each(function()
+    schedule_stub = stub(vim, "schedule")
+    schedule_stub.invokes(function(fn) fn() end)
+    setup_transport_stub = stub(ACPClient, "_setup_transport")
+  end)
+
+  after_each(function()
+    schedule_stub:revert()
+    setup_transport_stub:revert()
+  end)
+
+  ---@param handlers table
+  local function new_client(handlers)
+    local sent = {}
+    local client = ACPClient:new({ transport_type = "stdio", handlers = handlers })
+    client.transport = {
+      send = function(_, data)
+        table.insert(sent, vim.json.decode(data))
+        return true
+      end,
+      start = function() end,
+      stop = function() end,
+    }
+    client.state = "ready"
+    return client, sent
+  end
+
+  local permission_params = {
+    sessionId = "s1",
+    toolCall = { toolCallId = "tc1", title = "Edit", kind = "edit" },
+    options = {
+      { optionId = "allow", name = "Allow", kind = "allow_once" },
+      { optionId = "reject", name = "Reject", kind = "reject_once" },
+    },
+  }
+
+  describe("permission request queue", function()
+    it("shows parallel permission requests one after another and answers each", function()
+      local prompts = {}
+      local client, sent = new_client({
+        on_request_permission = function(tool_call, _, answer) table.insert(prompts, { tool_call, answer }) end,
+      })
+
+      -- Claude Code issues one request per parallel Edit; both arrive before either is answered
+      client:_handle_request_permission(10, permission_params)
+      client:_handle_request_permission(11, vim.tbl_deep_extend("force", permission_params, {
+        toolCall = { toolCallId = "tc2" },
+      }))
+
+      assert.equals(1, #prompts, "only one prompt may be visible at a time")
+      assert.equals("tc1", prompts[1][1].toolCallId)
+      assert.equals(0, #sent)
+
+      prompts[1][2]("allow")
+      assert.equals(1, #sent)
+      assert.equals(10, sent[1].id)
+      assert.equals("allow", sent[1].result.outcome.optionId)
+
+      -- the second request is only shown once the first one is answered
+      assert.equals(2, #prompts)
+      assert.equals("tc2", prompts[2][1].toolCallId)
+      prompts[2][2]("reject")
+      assert.equals(2, #sent)
+      assert.equals(11, sent[2].id)
+      assert.equals("reject", sent[2].result.outcome.optionId)
+      assert.is_nil(client.active_permission_id)
+      assert.is_nil(next(client.pending_permissions))
+    end)
+
+    it("ignores a second answer to the same request", function()
+      local answers = {}
+      local client, sent = new_client({
+        on_request_permission = function(_, _, answer) table.insert(answers, answer) end,
+      })
+      client:_handle_request_permission(20, permission_params)
+      answers[1]("allow")
+      answers[1]("reject")
+      assert.equals(1, #sent)
+      assert.equals("allow", sent[1].result.outcome.optionId)
+    end)
+
+    it("drops queued requests when the session is cancelled", function()
+      local prompts = {}
+      local client, sent = new_client({
+        on_request_permission = function(_, _, answer) table.insert(prompts, answer) end,
+      })
+      client:_handle_request_permission(30, permission_params)
+      client:_handle_request_permission(31, permission_params)
+      assert.equals(1, #prompts)
+
+      client:cancel_session("s1")
+      -- both requests answered with cancelled, then session/cancel
+      assert.equals(3, #sent)
+      assert.equals(30, sent[1].id)
+      assert.equals("cancelled", sent[1].result.outcome.outcome)
+      assert.equals(31, sent[2].id)
+      assert.equals("cancelled", sent[2].result.outcome.outcome)
+      assert.equals("session/cancel", sent[3].method)
+      assert.equals(0, #client.permission_queue)
+      assert.is_nil(client.active_permission_id)
+
+      -- the prompt still on screen answers late: nothing more is sent, no second prompt appears
+      prompts[1]("allow")
+      assert.equals(3, #sent)
+      assert.equals(1, #prompts)
+    end)
+
+    it("answers cancelled when the permission handler throws", function()
+      local client, sent = new_client({
+        on_request_permission = function() error("boom") end,
+      })
+      local error_stub = stub(require("avante.utils"), "error")
+      client:_handle_request_permission(40, permission_params)
+      error_stub:revert()
+      assert.equals(1, #sent)
+      assert.equals(40, sent[1].id)
+      assert.equals("cancelled", sent[1].result.outcome.outcome)
+    end)
+
+    it("rejects malformed permission requests instead of leaving them unanswered", function()
+      local client, sent = new_client({ on_request_permission = function() end })
+      client:_handle_request_permission(50, { sessionId = "s1" })
+      assert.equals(1, #sent)
+      assert.equals(50, sent[1].id)
+      assert.equals(ACPClient.ERROR_CODES.INVALID_PARAMS, sent[1].error.code)
+    end)
+  end)
+
+  describe("fs handlers", function()
+    it("reports a failed write as a JSON-RPC error", function()
+      local client, sent = new_client({
+        on_write_file = function(_, _, callback) callback("disk full") end,
+      })
+      client:_handle_write_text_file(60, { sessionId = "s1", path = "/x", content = "y" })
+      assert.equals(1, #sent)
+      assert.is_nil(sent[1].result)
+      assert.equals("disk full", sent[1].error.message)
+      assert.equals(ACPClient.ERROR_CODES.INTERNAL_ERROR, sent[1].error.code)
+    end)
+
+    it("answers with null on a successful write", function()
+      local client, sent = new_client({
+        on_write_file = function(_, _, callback) callback(nil) end,
+      })
+      client:_handle_write_text_file(61, { sessionId = "s1", path = "/x", content = "y" })
+      assert.equals(1, #sent)
+      assert.equals(vim.NIL, sent[1].result)
+      assert.is_nil(sent[1].error)
+    end)
+
+    it("turns an exception in the write handler into an error response", function()
+      local client, sent = new_client({
+        on_write_file = function() error("E37: No write since last change") end,
+      })
+      client:_handle_write_text_file(62, { sessionId = "s1", path = "/x", content = "y" })
+      assert.equals(1, #sent)
+      assert.equals(62, sent[1].id)
+      assert.truthy(sent[1].error.message:find("E37", 1, true))
+    end)
+
+    it("turns an exception in the read handler into an error response", function()
+      local client, sent = new_client({
+        on_read_file = function() error("kaboom") end,
+      })
+      client:_handle_read_text_file(63, { sessionId = "s1", path = "/x" })
+      assert.equals(1, #sent)
+      assert.equals(63, sent[1].id)
+      assert.truthy(sent[1].error.message:find("kaboom", 1, true))
+    end)
+  end)
+
+  describe("disconnected transport", function()
+    it("fails a request immediately when the agent's stdin is closed", function()
+      local client = ACPClient:new({ transport_type = "stdio", handlers = {} })
+      client.transport = { send = function() return false end, start = function() end, stop = function() end }
+      local got
+      client:_send_request("session/prompt", { sessionId = "s1" }, function(_, err) got = err end)
+      assert.is_not_nil(got)
+      assert.equals(ACPClient.ERROR_CODES.PROTOCOL_ERROR, got.code)
+      assert.is_nil(next(client.callbacks))
+    end)
+
+    it("describes an agent that died mid-session including its stderr", function()
+      local client = ACPClient:new({ transport_type = "stdio", command = "claude-agent-acp", args = {}, handlers = {} })
+      client:_record_stderr("TypeError: cannot read properties of undefined\n")
+      local msg = client:_format_unexpected_exit(1, 0)
+      assert.truthy(msg:find("exited unexpectedly", 1, true))
+      assert.truthy(msg:find("TypeError", 1, true))
+    end)
   end)
 end)
