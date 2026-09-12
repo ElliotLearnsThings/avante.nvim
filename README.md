@@ -4,7 +4,7 @@
 </div>
 
 <p align="center">
-  <a href="https://neovim.io/" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=Neovim&message=v0.10%2b&logo=neovim&labelColor=282828&logoColor=8faa80&color=414b32" alt="Neovim: v0.10+" /></a>
+  <a href="https://neovim.io/" target="_blank"><img src="https://img.shields.io/static/v1?style=flat-square&label=Neovim&message=v0.12%2b&logo=neovim&labelColor=282828&logoColor=8faa80&color=414b32" alt="Neovim: v0.12+" /></a>
   <a href="https://github.com/yetone/avante.nvim/actions/workflows/tests.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/yetone/avante.nvim/tests.yaml?style=flat-square&logo=lua&logoColor=c7c7c7&label=Lua+CI&labelColor=1E40AF&color=347D39&event=push" alt="Lua CI status" /></a>
   <a href="https://github.com/yetone/avante.nvim/actions/workflows/rust.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/yetone/avante.nvim/rust.yaml?style=flat-square&logo=rust&logoColor=ffffff&label=Rust+CI&labelColor=BC826A&color=347D39&event=push" alt="Rust CI status" /></a>
   <a href="https://github.com/yetone/avante.nvim/actions/workflows/pre-commit.yaml" target="_blank"><img src="https://img.shields.io/github/actions/workflow/status/yetone/avante.nvim/pre-commit.yaml?style=flat-square&logo=pre-commit&logoColor=ffffff&label=pre-commit&labelColor=FAAF3F&color=347D39&event=push" alt="pre-commit status" /></a>
@@ -30,6 +30,27 @@
 
 <https://github.com/user-attachments/assets/86140bfd-08b4-483d-a887-1b701d9e37dd>
 
+## Table of contents
+
+- [Features](#features)
+- [Avante Zen Mode](#avante-zen-mode)
+- [Project instructions](#project-instructions-with-avantemd)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Key Bindings](#key-bindings)
+- [Commands](#commands)
+- [Highlight Groups](#highlight-groups)
+- [Fast Apply](#fast-apply)
+- [ACP Support](#acp-support)
+- [RAG Service](#rag-service)
+- [Web Search Engines](#web-search-engines)
+- [Custom Tools](#custom-tools)
+- [MCP](#mcp)
+- [Integrations](#integrations)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Sponsorship ❤️
 
 If you like this project, please consider supporting me on Patreon, as it helps me to continue maintaining and improving it:
@@ -41,6 +62,10 @@ If you like this project, please consider supporting me on Patreon, as it helps 
 - **AI-Powered Code Assistance**: Interact with AI to ask questions about your current code file and receive intelligent suggestions for improvement or modification.
 - **One-Click Application**: Quickly apply the AI's suggested changes to your source code with a single command, streamlining the editing process and saving time.
 - **Project-Specific Instruction Files**: Customize AI behavior by adding a markdown file (`avante.md` by default) in the project root. This file is automatically referenced during workspace changes. You can also configure a custom file name for tailored project instructions.
+- **ACP support**: Agent Client Protocol support (codex, gemini, ...)
+- **Many providers supported**: openai, anthropic, mistral, deepseek, ollama,
+  llama-cpp, ...
+- **RAG (optional)**: you can with some extra configuration run a local RAG
 
 ## What this fork adds
 
@@ -104,9 +129,9 @@ Then install the Claude Code CLI and the ACP shim as described in [Quick start: 
 
 ## Avante Zen Mode
 
-It is possible to launch avante such that it looks like a typical Vibe Coding Agent CLI but while being completely Neovim underneath. So you can use your muscle-memory Vim operations and those rich and mature Neovim plugins on it. At the same time, by leveraging [ACP](https://github.com/yetone/avante.nvim#acp-support) it has all capabilities of claude code / gemini-cli / codex! Why not enjoy both?
+It is possible to launch avante such that it looks like a typical Vibe Coding Agent CLI while being Neovim underneath. At the same time, by leveraging [ACP](https://github.com/yetone/avante.nvim#acp-support) it has all capabilities of claude code / gemini-cli / codex! Why not enjoy both?
 
-Now all you need to do is put [`contrib/avante`](./contrib/avante) in your PATH (or create the equivalent alias); then every time you simply type avante just like using claude code and enter Avante’s Zen Mode!
+Now all you need to do is install [./contrib/avante](./contrib/avante) in your PATH (or create the equivalent alias); then every time you simply type `avante` just like using claude code and enter Avante’s Zen Mode!
 
 The effect is as follows:
 
@@ -207,7 +232,7 @@ For building binary if you wish to build from source, then `cargo` is required. 
 
 <details open>
 
-  <summary><a href="https://github.com/folke/lazy.nvim">lazy.nvim</a> (recommended)</summary>
+  <summary><a href="https://github.com/folke/lazy.nvim">lazy.nvim</a></summary>
 
 ```lua
 {
@@ -502,11 +527,22 @@ require('avante').setup({
 >
 > Any rendering plugins that support markdown should work with Avante as long as you add the supported filetype `Avante`. See <https://github.com/yetone/avante.nvim/issues/175> and [this comment](https://github.com/yetone/avante.nvim/issues/175#issuecomment-2313749363) for more information.
 
-### Default setup configuration
+### Configuration
 
-_See [config.lua#L9](./lua/avante/config.lua) for the full config_
+You can configure avante.nvim using a global variable:
 
-You can pass options directly to `setup()`:
+```lua
+vim.g.avante = {
+  provider = "claude",
+  behaviour = {
+    auto_suggestions = false,
+  },
+}
+
+```
+
+
+You can also pass options directly to `setup()`:
 
 ```lua
 require("avante").setup({
@@ -517,23 +553,12 @@ require("avante").setup({
 })
 ```
 
-Alternatively, define the same options in `vim.g.avante` before calling `setup()`:
-
-```lua
-vim.g.avante = {
-  provider = "claude",
-  behaviour = {
-    auto_suggestions = false,
-  },
-}
-
-require("avante").setup()
-```
-
 If both are used, options passed to `setup()` override values from `vim.g.avante`.
 
 <details>
 <summary>Default configuration</summary>
+
+_See [config.lua#L9](./lua/avante/config.lua) for the up to date full default configuration_
 
 ```lua
 {
@@ -709,7 +734,7 @@ If both are used, options passed to `setup()` override values from `vim.g.avante
 
 </details>
 
-## Blink.cmp users
+### Blink.cmp users
 
 For blink cmp users (nvim-cmp alternative) view below instruction for configuration
 This is achieved by emulating nvim-cmp using blink.compat
@@ -1077,56 +1102,6 @@ The following key bindings are available for use with `avante.nvim`:
 > If you are using `lazy.nvim`, then all keymap here will be safely set, meaning if `<leader>aa` is already binded, then avante.nvim won't bind this mapping.
 > In this case, user will be responsible for setting up their own. See [notes on keymaps](https://github.com/yetone/avante.nvim/wiki#keymaps-and-api-i-guess) for more details.
 
-### Neotree shortcut
-
-In the neotree sidebar, you can also add a new keyboard shortcut to quickly add `file/folder` to `Avante Selected Files`.
-
-<details>
-<summary>Neotree configuration</summary>
-
-```lua
-return {
-  {
-    'nvim-neo-tree/neo-tree.nvim',
-    config = function()
-      require('neo-tree').setup({
-        filesystem = {
-          commands = {
-            avante_add_files = function(state)
-              local node = state.tree:get_node()
-              local filepath = node:get_id()
-              local relative_path = require('avante.utils').relative_path(filepath)
-
-              local sidebar = require('avante').get()
-
-              local open = sidebar:is_open()
-              -- ensure avante sidebar is open
-              if not open then
-                require('avante.api').ask()
-                sidebar = require('avante').get()
-              end
-
-              sidebar.file_selector:add_selected_file(relative_path)
-
-              -- remove neo tree buffer
-              if not open then
-                sidebar.file_selector:remove_selected_file('neo-tree filesystem [1]')
-              end
-            end,
-          },
-          window = {
-            mappings = {
-              ['oa'] = 'avante_add_files',
-            },
-          },
-        },
-      })
-    end,
-  },
-}
-```
-
-</details>
 
 ## Commands
 
@@ -1241,23 +1216,6 @@ The process uses a specialized prompt format that includes:
 - `<update>`: The specific changes using truncation markers (`// ... existing code ...`)
 
 This approach ensures that the apply model can quickly and accurately merge your changes without the overhead of full code generation.
-
-## Ollama
-
-Ollama is a first-class provider for avante.nvim. To start using it you need to set `provider = "ollama"`
-in the configuration, set the `model` field in `ollama` to the model you want to use. Ollama is disabled
-by default, you need to provide an implementation for its `is_env_set` method to properly enable it.
-For example:
-
-```lua
-provider = "ollama",
-providers = {
-  ollama = {
-    model = "qwq:32b",
-    is_env_set = require("avante.providers.ollama").check_endpoint_alive,
-  },
-}
-```
 
 ## ACP Support
 
@@ -1399,16 +1357,18 @@ Avante's tools include some web search engines, currently support:
 
 - [Tavily](https://tavily.com/)
 - [SerpApi - Search API](https://serpapi.com/)
+- [SearchAPI](https://www.searchapi.io/)
 - Google's [Programmable Search Engine](https://developers.google.com/custom-search/v1/overview)
 - [Kagi](https://help.kagi.com/kagi/api/search.html)
 - [Brave Search](https://api-dashboard.search.brave.com/app/documentation/web-search/get-started)
 - [SearXNG](https://searxng.github.io/searxng/)
 
-The default is Tavily, and can be changed through configuring `Config.web_search_engine.provider`:
+Each engine is exposed as its own tool (`web_search_tavily`, `web_search_serpapi`,
+`web_search_searchapi`, `web_search_google`, `web_search_kagi`, `web_search_brave`,
+and `web_search_searxng`). Shared settings remain under `web_search_engine`:
 
 ```lua
 web_search_engine = {
-  provider = "tavily", -- tavily, serpapi, google, kagi, brave, or searxng
   proxy = nil, -- proxy support, e.g., http://127.0.0.1:7890
 }
 ```
@@ -1417,6 +1377,7 @@ Environment variables required for providers:
 
 - Tavily: `TAVILY_API_KEY`
 - SerpApi: `SERPAPI_API_KEY`
+- SearchAPI: `SEARCHAPI_API_KEY`
 - Google:
   - `GOOGLE_SEARCH_API_KEY` as the [API key](https://developers.google.com/custom-search/v1/overview)
   - `GOOGLE_SEARCH_ENGINE_ID` as the [search engine](https://programmablesearchengine.google.com) ID
@@ -1454,58 +1415,13 @@ In case you want to ban some tools to avoid its usage (like Claude 3.7 overusing
 Tool list
 
 > rag_search, python, git_diff, git_commit, glob, search_keyword, read_file_toplevel_symbols,
-> read_file, create_file, move_path, copy_path, delete_path, create_dir, bash, web_search, fetch
+> read_file, create_file, move_path, copy_path, delete_path, create_dir, bash,
+> web_search_tavily
+
 
 ## Custom Tools
 
-Avante allows you to define custom tools that can be used by the AI during code generation and analysis. These tools can execute shell commands, run scripts, or perform any custom logic you need.
-
-### Example: Go Test Runner
-
-<details>
-<summary>Here's an example of a custom tool that runs Go unit tests:</summary>
-
-```lua
-{
-  custom_tools = {
-    {
-      name = "run_go_tests",  -- Unique name for the tool
-      description = "Run Go unit tests and return results",  -- Description shown to AI
-      command = "go test -v ./...",  -- Shell command to execute
-      param = {  -- Input parameters (optional)
-        type = "table",
-        fields = {
-          {
-            name = "target",
-            description = "Package or directory to test (e.g. './pkg/...' or './internal/pkg')",
-            type = "string",
-            optional = true,
-          },
-        },
-      },
-      returns = {  -- Expected return values
-        {
-          name = "result",
-          description = "Result of the fetch",
-          type = "string",
-        },
-        {
-          name = "error",
-          description = "Error message if the fetch was not successful",
-          type = "string",
-          optional = true,
-        },
-      },
-      func = function(params, on_log, on_complete)  -- Custom function to execute
-        local target = params.target or "./..."
-        return vim.system({ "go", "test", "-v", target }, { text = true }):wait().stdout
-      end,
-    },
-  },
-}
-```
-
-</details>
+See `:h avante-custom-tools`.
 
 ## MCP
 
@@ -1610,21 +1526,20 @@ If you have the following structure:
 
 ## Integrations
 
-Avante.nvim can be extended to work with other plugins by using its extension modules. For instance with [`nvim-tree`](https://github.com/nvim-tree/nvim-tree.lua), see [the wiki](https://github.com/yetone/avante.nvim/wiki/plugin%E2%80%90integrations).
+Avante.nvim can be extended to work with other plugins by using its extension modules:
+- [`nvim-tree`](https://github.com/nvim-tree/nvim-tree.lua)
+- neotree
+
+See [the wiki](https://github.com/yetone/avante.nvim/wiki/plugin%E2%80%90integrations) for details.
 
 ## TODOs
 
-- [x] Chat with current file
-- [x] Apply diff patch
 - [x] Chat with the selected block
-- [x] Slash commands
 - [x] Edit the selected block
 - [x] Smart Tab (Cursor Flow)
 - [x] Chat with project (You can use `@codebase` to chat with the whole project)
-- [x] Chat with selected files
-- [x] Tool use
-- [x] MCP
-- [x] ACP
+- [ ] better debugging capabilities (for prompts notably)
+- [ ] provide an helper to report bugs more effectively
 - [ ] Better codebase indexing
 
 ## Roadmap
@@ -1676,7 +1591,7 @@ You can also disable specific tools while keeping agentic mode enabled by config
 
 Contributions to avante.nvim are welcome! If you're interested in helping out, please feel free to submit pull requests or open issues.
 
-See [wiki](https://github.com/yetone/avante.nvim/wiki) for more recipes and tricks.
+See [wiki](https://github.com/yetone/avante.nvim/wiki) for more recipes and tricks and [./CONTRIBUTING.md] to setup a local development environment.
 
 ## Acknowledgments
 
@@ -1723,10 +1638,10 @@ avante.nvim is licensed under the Apache 2.0 License. For more details, please r
 # Star History
 
 <p align="center">
-  <a target="_blank" href="https://star-history.dera.page/#yetone/avante.nvim&Date">
+  <a target="_blank" href="https://star-history.dera.page/#avante-corp/avante.nvim&Date">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=yetone/avante.nvim&type=Date&theme=dark">
-      <img alt="NebulaGraph Data Intelligence Suite(ngdi)" src="https://star-history.dera.page/svg?repos=yetone/avante.nvim&type=Date">
+      <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=avante-corp/avante.nvim&type=Date&theme=dark">
+      <img alt="NebulaGraph Data Intelligence Suite(ngdi)" src="https://star-history.dera.page/svg?repos=avante-corp/avante.nvim&type=Date">
     </picture>
   </a>
 </p>

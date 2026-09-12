@@ -903,7 +903,7 @@ local function minimize_snippet(original_lines, snippet)
   local snippet_content = snippet.content
   local snippet_lines = vim.split(snippet_content, "\n")
   ---@diagnostic disable-next-line: assign-type-mismatch
-  local patch = vim.diff( ---@type integer[][]
+  local patch = vim.text.diff( ---@type integer[][]
     original_snippet_content,
     snippet_content,
     ---@diagnostic disable-next-line: missing-fields
@@ -980,6 +980,7 @@ function Sidebar:handle_expand_message(message_uuid, expanded)
   end, 100)
 end
 
+---@private
 function Sidebar:edit_user_request()
   local block = self:get_current_user_request_block()
   if not block then return end
@@ -993,6 +994,7 @@ function Sidebar:edit_user_request()
 end
 
 ---@param current_cursor boolean
+---@private
 function Sidebar:apply(current_cursor)
   local response, response_start_line = self:get_content_between_separators()
   local all_snippets_map = extract_code_snippets_map(response)
@@ -1187,6 +1189,7 @@ function Sidebar:render_input(ask)
   )
 end
 
+---@private
 function Sidebar:render_selected_code()
   if not self.code.selection then return end
   if not Utils.is_valid_container(self.containers.selected_code) then return end
@@ -1207,6 +1210,7 @@ function Sidebar:render_selected_code()
   )
 end
 
+---@private
 function Sidebar:bind_apply_key()
   if self.containers.result then
     vim.keymap.set(
@@ -1218,12 +1222,14 @@ function Sidebar:bind_apply_key()
   end
 end
 
+---@private
 function Sidebar:unbind_apply_key()
   if self.containers.result then
     pcall(vim.keymap.del, "n", Config.mappings.sidebar.apply_cursor, { buffer = self.containers.result.bufnr })
   end
 end
 
+---@private
 function Sidebar:bind_retry_user_request_key()
   if self.containers.result then
     vim.keymap.set(
@@ -1235,6 +1241,7 @@ function Sidebar:bind_retry_user_request_key()
   end
 end
 
+---@private
 function Sidebar:unbind_retry_user_request_key()
   if self.containers.result then
     pcall(vim.keymap.del, "n", Config.mappings.sidebar.retry_user_request, { buffer = self.containers.result.bufnr })

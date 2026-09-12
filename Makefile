@@ -47,7 +47,7 @@ $(foreach lua_version,$(LUA_VERSIONS),$(eval $(call make_definitions,$(lua_versi
 
 define build_package
 $1-$2:
-	cargo build --release --features=$1 -p avante-$2 $(if $(CARGO_TARGET),--target $(CARGO_TARGET))
+	cargo build --release --no-default-features --features=$1 -p avante-$2 $(if $(CARGO_TARGET),--target $(CARGO_TARGET))
 	cp $(TARGET_DIR)/libavante_$(shell echo $2 | tr - _).$(CARGO_EXT) $(BUILD_DIR)/avante_$(shell echo $2 | tr - _).$(EXT)
 endef
 
@@ -82,6 +82,8 @@ docgen:
 		lua/cmp_avante/mentions.lua \
 		lua/avante/rag_service.lua \
 		lua/avante/llm_tools/init.lua \
+		lua/avante/llm_tools/bash.lua \
+		lua/avante/llm_tools/web_search.lua \
 		lua/avante/utils/prompts.lua \
 		lua/avante/extensions/init.lua \
 		lua/avante/utils/init.lua \
@@ -97,13 +99,13 @@ docgen:
 	nvim -u NONE -i NONE --headless +'helptags doc' +'quit!'
 
 luacheck:
-	@luacheck `find \( -path './target' -prune \) -o -name "*.lua" -print` --codes
+	luacheck `find \( -path './target' -prune \) -o -name "*.lua" -print` --codes
 
 luastylecheck:
-	@stylua --check lua/ plugin/ tests/
+	stylua --check lua/ plugin/ tests/
 
 stylefix:
-	@stylua lua/ plugin/
+	stylua lua/ plugin/
 
 .PHONY: ruststylecheck
 ruststylecheck:
@@ -119,7 +121,7 @@ rusttest:
 
 .PHONY: luatest
 luatest:
-	@./scripts/run-luatest.sh
+	./scripts/run-luatest.sh
 
 # upgrade / pin CI actions
 .PHONY: upgrade-actions

@@ -33,12 +33,16 @@ Usage ·····································
  ······································································ |avante|
 Configuration via variable ······································ |vim.g.avante|
 Configuration ·················································· |avante-config|
+Avante API ························································ |avante-api|
 Commands (:AvanteAsk,...) ···································· |avante-commands|
 Sidebar ······················································· |avante-sidebar|
 Slash commands ·········································· |avante-slashcommands|
 avante completion sources ·································· |avante-completion|
 avante RAG service ········································ |avante-rag-service|
+Custom tools ············································· |avante-custom-tools|
 avante tools ···················································· |avante-tools|
+Avante bash ················································ |avante-tools-bash|
+Web search tools ····································· |avante-tools-web-search|
 Custom prompts ················································ |avante-prompts|
 avante utilities ················································ |avante-utils|
 Agent Client Protocol support ····································· |avante-acp|
@@ -60,7 +64,7 @@ https://github.com/yetone/avante.nvim.
 ==============================================================================
 Requirements                                               *avante-requirements*
 
- avante.nvim requires Neovim 0.11.0 or later.
+ avante.nvim requires Neovim 0.12.0 or later.
  Mandatory dependencies are:
  - 'nvim-lua/plenary.nvim'
  - 'MunifTanjim/nui.nvim'.
@@ -153,12 +157,12 @@ Configuration via variable                                        *vim.g.avante*
 
 The recommended way to configure avante.nvim is to use the global variable
 vim.g.avante . The setup() function still needs to be called.
-<
+>lua
  vim.g.avante = {
    log_level =  vim.log.levels.ERROR,
    -- Example: Using snacks.nvim as input provider
    input = {
-     provider = "snacks", -- "native" | "dressing" | "snacks"
+     provider = "snacks", -- "native" | "snacks"
      provider_opts = {
        -- Snacks input configuration
        title = "Avante Input",
@@ -168,7 +172,7 @@ vim.g.avante . The setup() function still needs to be called.
    },
    -- Your other config here!
  })
->
+<
 
 ==============================================================================
 Configuration                                                    *avante-config*
@@ -304,45 +308,13 @@ Select an ACP-backed provider with |:AvanteSwitchProvider|.
 You can also set avante options via `vim.g.avante`.
 
 
-                                  *WebSearchEngineProviderResponseBodyFormatter*
-WebSearchEngineProviderResponseBodyFormatter
+avante.Config.WebSearchEngine                    *avante.Config.WebSearchEngine*
     NOTE: user will be merged with defaults and
     we add a default var_accessor for this table to config values.
 
-    Type: ~
-        fun(body:table):
-
-
-                                     *avante.Config.WebSearchEngineProviderName*
-avante.Config.WebSearchEngineProviderName
-
-    Variants: ~
-        ("tavily")
-        ("serpapi")
-        ("searchapi")
-        ("google")
-        ("kagi")
-        ("brave")
-        ("searxng")
-
-
-avante.Config.WebSearchEngineProvider    *avante.Config.WebSearchEngineProvider*
-
     Fields: ~
-        {api_key_name?}         (string)                                        Environment variable containing the provider API key.
-        {api_url_name?}         (string)                                        Environment variable containing the provider API URL.
-        {engine_id_name?}       (string)                                        Environment variable containing the search engine ID.
-        {extra_request_body}    (table<string,any>)                             Additional parameters included in search requests.
-        {format_response_body}  (WebSearchEngineProviderResponseBodyFormatter)  Converts a provider response into text and an optional error.
-
-
-avante.Config.WebSearchEngine                    *avante.Config.WebSearchEngine*
-
-    Fields: ~
-        {provider}   (avante.Config.WebSearchEngineProviderName)            Web search provider to use.
-                                                                            Avante tools can use web search engines.
-        {proxy?}     (string)                                               Proxy URL used for web search requests.
-        {providers}  (table<string,avante.Config.WebSearchEngineProvider>)  Web search provider configurations. See |avante-web-search|
+        {proxy?}  (string)  Proxy URL used for web search requests.
+                            Avante tools can use web search engines.
 
 
 avante.InputProvider                                      *avante.InputProvider*
@@ -486,9 +458,9 @@ avante.Config                                                    *avante.Config*
         {prompt_logger}               (avante.Config.PromptLogger)     Prompt logging options.
         {windows}                     (table)
         {disabled_tools}              (string[])                       You can choose to disable tools by their names in case you want to avoid its usage (like Claude 3.7 overusing the python tool). For example: `{ "python" }`
-        {custom_tools}                (AvanteSlashCommand[])           see |*avante-custom-tools*|
-        {slash_commands}              (AvanteSlashCommand[])           see |*avante-slashcommands*|
-        {shortcuts}                   (AvanteShortcut[])               see |*avante-shortcuts*|
+        {custom_tools}                (AvanteSlashCommand[])           see |avante-custom-tools|
+        {slash_commands}              (AvanteSlashCommand[])           see |avante-slashcommands|
+        {shortcuts}                   (AvanteShortcut[])               see |avante-shortcuts|
         {ask_opts}                    (AskOptions)
 
 
@@ -581,6 +553,130 @@ M.get_provider_config({provider_name})       *avante-config.get_provider_config*
 
 
 ==============================================================================
+Avante API                                                          *avante-api*
+
+A collection of functions to build your own avante experience.
+
+avante.ApiToggle                                              *avante.ApiToggle*
+
+    Fields: ~
+        {debug}  (ToggleBind.wrap)  @operator call(): boolean
+        {hint}   (ToggleBind.wrap)
+
+
+avante.Api                                                          *avante.Api*
+
+    Fields: ~
+        {toggle}  (avante.ApiToggle)
+
+
+                                           *avante-api.switch_selector_provider*
+M.switch_selector_provider({target_provider})
+
+    Parameters: ~
+        {target_provider}  (avante.SelectorProvider)
+
+
+M.switch_input_provider({target_provider})    *avante-api.switch_input_provider*
+
+    Parameters: ~
+        {target_provider}  (avante.InputProvider)
+
+
+M.switch_provider({target})                         *avante-api.switch_provider*
+
+    Parameters: ~
+        {target}  (avante.ProviderName)
+
+
+M.build({opts?})                                              *avante-api.build*
+    Command to install the necessary rust libraries
+    Defaults to download the libraries but passing `source=true` will force a local build via cargo
+    Blocking as it waits for cargo to finish
+
+    Parameters: ~
+        {opts?}  ({source:boolean})
+
+
+AskOptions                                                          *AskOptions*
+
+    Fields: ~
+        {question?}             (string)                       optional questions
+        {win?}                  (table<string,any>)            windows options similar to |nvim_open_win()|
+        {ask?}                  (boolean)
+        {floating?}             (boolean)                      whether to open a floating input to enter the question
+        {new_chat?}             (boolean)                      whether to open a new chat
+        {without_selection?}    (boolean)                      whether to open a new chat without selection
+        {sidebar_pre_render?}   (fun(sidebar:avante.Sidebar))
+        {sidebar_post_render?}  (fun(sidebar:avante.Sidebar))
+        {project_root?}         (string)                       optional project root
+        {show_logo?}            (boolean)                      whether to show the logo
+
+
+M.full_view_ask()                                     *avante-api.full_view_ask*
+
+
+M.ask({opts?})                                                  *avante-api.ask*
+
+    Parameters: ~
+        {opts?}  (AskOptions)
+
+
+M.edit({request?}, {line1?}, {line2?})                         *avante-api.edit*
+
+    Parameters: ~
+        {request?}  (string)
+        {line1?}    (integer)
+        {line2?}    (integer)
+
+
+M.get_suggestion()                                   *avante-api.get_suggestion*
+
+    Returns: ~
+        (avante.Suggestion|nil)
+
+
+M.refresh({opts?})                                          *avante-api.refresh*
+
+    Parameters: ~
+        {opts?}  (AskOptions)
+
+
+M.focus({opts?})                                              *avante-api.focus*
+
+    Parameters: ~
+        {opts?}  (AskOptions)
+
+
+M.select_model({all?})                                 *avante-api.select_model*
+    Select a model from current provider (default) or all providers
+
+    Parameters: ~
+        {all?}  (boolean)  Saves the choice to stdpath("state")
+
+
+M.select_acp_model()                               *avante-api.select_acp_model*
+
+
+M.select_acp_mode()                                 *avante-api.select_acp_mode*
+
+
+M.select_history()                                   *avante-api.select_history*
+
+
+M.add_buffer_files()                               *avante-api.add_buffer_files*
+
+
+M.add_selected_file()                             *avante-api.add_selected_file*
+
+
+M.remove_selected_file()                       *avante-api.remove_selected_file*
+
+
+M.stop()                                                       *avante-api.stop*
+
+
+==============================================================================
 Commands (:AvanteAsk,...)                                      *avante-commands*
 
 
@@ -650,8 +746,9 @@ Commands (:AvanteAsk,...)                                      *avante-commands*
          Toggle the Avante sidebar.
 
                                                      *:AvanteModels*
- :AvanteModels
-         Show the model list.
+ :AvanteModels [--all] [timeout]
+         Show the model list, optionally querying all providers and overriding
+         the model-list timeout in milliseconds. See |avante-api.select_model|
 
                                                      *:AvanteACPModels*
  :AvanteACPModels
@@ -933,15 +1030,6 @@ Sidebar:retry_user_request()                 *avante-sidebar:retry_user_request*
 Sidebar:handle_expand_message()           *avante-sidebar:handle_expand_message*
 
 
-Sidebar:edit_user_request()                   *avante-sidebar:edit_user_request*
-
-
-Sidebar:apply({current_cursor})                           *avante-sidebar:apply*
-
-    Parameters: ~
-        {current_cursor}  (boolean)
-
-
 Sidebar:render_header()                           *avante-sidebar:render_header*
     When include_model is set, in ACP mode, model will be rendered as "model | mode"
     else it will be set as
@@ -955,23 +1043,6 @@ Sidebar:render_input({ask?})                       *avante-sidebar:render_input*
 
     Parameters: ~
         {ask?}  (boolean)
-
-
-Sidebar:render_selected_code()             *avante-sidebar:render_selected_code*
-
-
-Sidebar:bind_apply_key()                         *avante-sidebar:bind_apply_key*
-
-
-Sidebar:unbind_apply_key()                     *avante-sidebar:unbind_apply_key*
-
-
-                                    *avante-sidebar:bind_retry_user_request_key*
-Sidebar:bind_retry_user_request_key()
-
-
-                                  *avante-sidebar:unbind_retry_user_request_key*
-Sidebar:unbind_retry_user_request_key()
 
 
 Sidebar:bind_expand_tool_use_key()     *avante-sidebar:bind_expand_tool_use_key*
@@ -1594,11 +1665,17 @@ M.get_resources()                             *avante-rag-service.get_resources*
         (AvanteRagServiceResourceListResponse|nil)
 
 
-                                                           *avante-custom-tools*
+==============================================================================
+Custom tools                                               *avante-custom-tools*
+
 Custom tools can run shell commands, scripts, or Lua functions
-<
+
+>lua
    vim.g.avante = {
      custom_tools = {
+       -- adds a builtin (but disabled by default) web search_google tool
+       require'avante.llm_tools.web_search'.web_search_google,
+       -- Here's an example of a custom tool that runs Go unit tests:
        {
          name = "run_go_tests",
          description = "Run Go unit tests and return results",
@@ -1627,16 +1704,16 @@ Custom tools can run shell commands, scripts, or Lua functions
        },
      },
    }
->
+<
 
 ==============================================================================
 avante tools                                                      *avante-tools*
 
 
  Agentic mode enables tool use. If a model does not support tools, disable
- them for that provider:
->
-   require("avante").setup({
+ them for that provider with:
+>lua
+   vim.g.avante = {
      providers = {
        claude = {
          disable_tools = true,
@@ -1645,18 +1722,33 @@ avante tools                                                      *avante-tools*
    })
 <
 
+You can see enabled tools with:
 
+>lua
+   vim.print(require'avante.llm_tools'.get_tool_names())
+<
+
+See |avante-custom-tools| on how to add your own tools.
+
+You can disable tools like this:
+>lua
+  vim.g.avante = {
+   disabled_tools = { "web_search_tavily" }
+  }
+<
 
                                                          *avante-tools-builtins*
  Built-in tool names include:
 >
    rag_search, python, git_diff, git_commit, glob, search_keyword,
    read_file_toplevel_symbols, read_file, create_file, move_path, copy_path,
-   delete_path, create_dir, bash, web_search, fetch
+   delete_path, create_dir, bash, web_search_tavily, fetch
 <
 
 
 M.read_file_toplevel_symbols()         *avante-tools.read_file_toplevel_symbols*
+    Read the top-level symbols of a file in current project scope.
+    It can be used to extract information about functions, types, constants, and other symbols that are defined at the top level of a file.
 
 
 M.str_replace_editor()                         *avante-tools.str_replace_editor*
@@ -1666,6 +1758,7 @@ M.str_replace_based_edit_tool()       *avante-tools.str_replace_based_edit_tool*
 
 
 M.read_global_file()                             *avante-tools.read_global_file*
+    Read the contents of a file in the global scope if the file content is not already in context
 
 
 M.write_global_file()                           *avante-tools.write_global_file*
@@ -1683,29 +1776,8 @@ M.delete_path()                                       *avante-tools.delete_path*
 M.create_dir()                                         *avante-tools.create_dir*
 
 
-                                                             *avante-web-search*
-<
-  vim.g.avante = {
-    web_search_engine = {
-      provider = "tavily",
-      proxy = nil,
-    },
-  }
->
-
- Supported providers and environment variables:
-
- - Tavily: `TAVILY_API_KEY`
- - SerpApi: `SERPAPI_API_KEY`
- - Google: `GOOGLE_SEARCH_API_KEY` and `GOOGLE_SEARCH_ENGINE_ID`
- - Kagi: `KAGI_API_KEY`
- - Brave Search: `BRAVE_API_KEY`
- - SearXNG: `SEARXNG_API_URL`
-
-M.web_search()                                         *avante-tools.web_search*
-
-
 M.fetch()                                                   *avante-tools.fetch*
+    Fetch markdown from a url using our rust libraries
 
 
 M.git_diff()                                             *avante-tools.git_diff*
@@ -1718,6 +1790,8 @@ M.rag_search()                                         *avante-tools.rag_search*
 
 
 M.python()                                                 *avante-tools.python*
+    Runs python code via docker.
+    Default container is python:3.14-slim-bookworm
 
 
 M.get_tools({user_input}, {history_messages})           *avante-tools.get_tools*
@@ -1731,6 +1805,7 @@ M.get_tools({user_input}, {history_messages})           *avante-tools.get_tools*
 
 
 M.get_tool_names()                                 *avante-tools.get_tool_names*
+    @brief Get all active tools' names
 
 
 M._tools                                                              *M._tools*
@@ -1766,6 +1841,69 @@ M.stringify_tool_use({tool_use})               *avante-tools.stringify_tool_use*
 
     Returns: ~
         (string)
+
+
+==============================================================================
+Avante bash                                                  *avante-tools-bash*
+
+AvanteLLMTool                                                    *AvanteLLMTool*
+
+
+M.get_description()                          *avante-tools-bash.get_description*
+
+
+M.param                                                                *M.param*
+
+    Type: ~
+        (AvanteLLMToolParam)
+
+
+M.returns                                                            *M.returns*
+
+    Type: ~
+        (AvanteLLMToolReturn[])
+
+
+M.func()                                                *avante-tools-bash.func*
+
+
+==============================================================================
+Web search tools                                       *avante-tools-web-search*
+
+<
+  vim.g.avante = {
+    web_search_engine = {
+      proxy = nil,
+    },
+  }
+>
+
+ Supported providers and environment variables:
+
+ - Tavily: `TAVILY_API_KEY`
+ - SerpApi: `SERPAPI_API_KEY`
+ - SearchAPI: `SEARCHAPI_API_KEY`
+ - Google: `GOOGLE_SEARCH_API_KEY` and `GOOGLE_SEARCH_ENGINE_ID`
+ - Kagi: `KAGI_API_KEY`
+ - Brave Search: `BRAVE_API_KEY`
+ - SearXNG: `SEARXNG_API_URL`
+
+WebSearchProviderName                                    *WebSearchProviderName*
+
+    Variants: ~
+        ("tavily")
+        ("serpapi")
+        ("searchapi")
+        ("google")
+        ("kagi")
+        ("brave")
+        ("searxng")
+
+
+WebSearchResponseFormatter                          *WebSearchResponseFormatter*
+
+    Type: ~
+        fun(body:table):
 
 
 ==============================================================================
@@ -3605,7 +3743,10 @@ M.on_error({result})                          *avante-providers-ollama.on_error*
         {result}  (table)
 
 
-M:list_models()                            *avante-providers-ollama:list_models*
+M:list_models({timeout?})                  *avante-providers-ollama:list_models*
+
+    Parameters: ~
+        {timeout?}  (integer)  Timeout in milliseconds
 
 
 M.check_endpoint_alive()          *avante-providers-ollama.check_endpoint_alive*
@@ -3643,8 +3784,11 @@ M.is_mistral()                              *avante-providers-openai.is_mistral*
         (boolean)
 
 
-M:list_models()                            *avante-providers-openai:list_models*
+M:list_models({timeout?})                  *avante-providers-openai:list_models*
     Asking remote provider to list available models
+
+    Parameters: ~
+        {timeout?}  (integer)  Timeout in milliseconds, overriding the provider configuration
 
     Returns: ~
         (AvanteProviderModelList)

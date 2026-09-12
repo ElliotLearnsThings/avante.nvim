@@ -1,3 +1,8 @@
+---@mod avante-api Avante API
+---
+---@brief [[
+---A collection of functions to build your own avante experience.
+---@brief ]]
 local Config = require("avante.config")
 local Utils = require("avante.utils")
 
@@ -52,7 +57,7 @@ function M.build(opts)
   local git_root = vim.fs.find(".git", { path = dirname, upward = true })[1]
   local build_directory = git_root and vim.fn.fnamemodify(git_root, ":h") or (dirname .. "/../../")
 
-  if opts.source and not vim.fn.executable("cargo") then
+  if opts.source and vim.fn.executable("cargo") == 0 then
     error("Building avante.nvim requires cargo to be installed.", 2)
   end
 
@@ -61,11 +66,11 @@ function M.build(opts)
   local os_name = Utils.get_os_name()
 
   if vim.tbl_contains({ "linux", "darwin" }, os_name) then
-    cmd = {
+    cmd = opts.source == true and {
       "sh",
       "-c",
-      string.format("make BUILD_FROM_SOURCE=%s -C %s", opts.source == true and "true" or "false", build_directory),
-    }
+      string.format("make -C %s", build_directory),
+    } or { "sh", string.format("%s/build.sh", build_directory) }
   elseif os_name == "windows" then
     build_directory = to_windows_path(build_directory)
     cmd = {
@@ -83,25 +88,18 @@ function M.build(opts)
     error("Unsupported operating system: " .. os_name, 2)
   end
 
-  Utils.info("Starting command " .. table.concat(cmd, " "))
+  local cmd_str = table.concat(cmd, " ")
+  Utils.info("Starting command " .. cmd_str)
   local ok, job_or_err = pcall(vim.system, cmd, { text = true }, function(obj)
-    -- local stderr = obj.stderr and vim.split(obj.stderr, "\n") or {}
-    -- local stdout = obj.stdout and vim.split(obj.stdout, "\n") or {}
-    -- vim.print(stdout)
     if obj.code == 0 then
       local output = obj.stdout
 
-      -- if #output == 0 then
-      --   table.insert(output, "")
       Utils.debug({ "build output:", output })
-      -- end
     else
-      local stderr = obj.stderr
-      -- vim.list_extend(
-      Utils.error({ "build error:", stderr })
+      Utils.error({ "build error (stderr):", obj.stderr })
     end
   end)
-  if not ok then Utils.error("Failed to run the build command: " .. cmd .. "\n" .. job_or_err, { once = true }) end
+  if not ok then Utils.error("Failed to run the build command: " .. cmd_str .. "\n" .. job_or_err, { once = true }) end
 
   return job_or_err:wait()
 end
@@ -258,7 +256,10 @@ function M.focus(opts)
   end
 end
 
-function M.select_model() require("avante.model_selector").open() end
+---Select a model from current provider (default) or all providers
+---@param all? boolean
+---Saves the choice to stdpath("state")
+function M.select_model(all) require("avante.model_selector").open(all) end
 
 function M.select_acp_model() require("avante.acp_config_selector").open_model() end
 
@@ -343,6 +344,7 @@ end
 
 function M.stop() require("avante.llm").cancel_inflight_request() end
 
+---@export M
 return setmetatable(M, {
   __index = function(t, k)
     local module = require("avante")

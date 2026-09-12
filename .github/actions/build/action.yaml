@@ -25,10 +25,9 @@ runs:
     - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # ratchet:Swatinem/rust-cache@v2
       if: ${{ inputs.container == null }}
 
-    - uses: dtolnay/rust-toolchain@52699249a776424c51ebc9ee197baf0f9dbf0d8a # ratchet:dtolnay/rust-toolchain@1.86
+    - uses: dtolnay/rust-toolchain@9376cdc5a5e25b16da71af47712785cf06b0d6d4 # ratchet:dtolnay/rust-toolchain@1.94
       if: ${{ inputs.container == null }}
       with:
-        toolchain: stable
         targets: ${{ inputs.rust_target }}
 
     - name: Install Nix
@@ -51,13 +50,6 @@ runs:
         ls -la lua
 
 
-    - name: Build all crates (Windows)
-      if: ${{ inputs.os_name == 'windows' }}
-      shell: bash
-      run: |
-        # TODO run AvanteBuild instead
-        cargo build --release --features ${{ matrix.feature }} --target ${{ inputs.rust_target }}
-
     - name: Build all crates (Linux) with glibc 2.17 # for glibc 2.17
       shell: bash
       if: ${{ inputs.container != null }}
@@ -70,9 +62,15 @@ runs:
       if: ${{ inputs.os_name != 'windows' }}
       shell: bash
       run: |
-        mkdir -p results
-        cp -v lua/avante_*.so results/
-        tar zcvf avante_lib-${{ inputs.os_name }}-${{ inputs.arch }}-${{ matrix.feature }}.tar.gz results/*.so
+        # AvanteBuild put the libraries in `lua/`
+        (cd lua && tar cvf - *.so | gzip ) > avante_lib-${{ inputs.os_name }}-${{ inputs.arch }}-${{ matrix.feature }}.tar.gz
+
+    - name: Build all crates (Windows)
+      if: ${{ inputs.os_name == 'windows' }}
+      shell: bash
+      run: |
+        # TODO run AvanteBuild instead
+        cargo build --release --features ${{ matrix.feature }} --target ${{ inputs.rust_target }}
 
     - name: Handle binaries (Windows)
       if: ${{ inputs.os_name == 'windows' }}
@@ -80,13 +78,12 @@ runs:
       run: |
         New-Item -ItemType Directory -Force -Path results
 
+        # we can probably remove that
         $TargetDir = "target\${{ inputs.rust_target }}\release"
-        Copy-Item -Path "$TargetDir\avante_templates.dll" -Destination "results\avante_templates.dll"
-        Copy-Item -Path "$TargetDir\avante_tokenizers.dll" -Destination "results\avante_tokenizers.dll"
-        Copy-Item -Path "$TargetDir\avante_repo_map.dll" -Destination "results\avante_repo_map.dll"
-        Copy-Item -Path "$TargetDir\avante_html2md.dll" -Destination "results\avante_html2md.dll"
-
-        Set-Location -Path results
+        Copy-Item -Path "$TargetDir\avante_templates.dll" -Destination "avante_templates.dll"
+        Copy-Item -Path "$TargetDir\avante_tokenizers.dll" -Destination "avante_tokenizers.dll"
+        Copy-Item -Path "$TargetDir\avante_repo_map.dll" -Destination "avante_repo_map.dll"
+        Copy-Item -Path "$TargetDir\avante_html2md.dll" -Destination "avante_html2md.dll"
 
         $dllFiles = Get-ChildItem -Filter "*.dll" | Select-Object -ExpandProperty Name
         Compress-Archive -Path $dllFiles -DestinationPath "avante_lib-${{ inputs.os_name }}-${{ inputs.arch }}-${{ matrix.feature }}.zip"
