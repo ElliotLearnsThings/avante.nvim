@@ -300,6 +300,7 @@ local Utils = require("avante.utils")
 ---@field active_permission_id number|nil id of the permission request currently shown to the user
 ---@field active_session_ids table<string, boolean> sessions created/loaded on this connection
 ---@field fresh_session_ids table<string, boolean> sessions created on this connection that have not been prompted yet
+---@field sent_files table<string, table<string, string>> per session: selected files already given to the agent
 ---@field stderr_lines string[] last lines received on the agent's stderr
 ---@field terminals table<string, avante.acp.Terminal>
 ---@field terminal_counter integer
@@ -626,8 +627,10 @@ function ACPClient:_create_stdio_transport()
       end
 
       -- The agent process is gone, so every session it knew about must be
-      -- re-created / re-loaded on the next connection.
+      -- re-created / re-loaded on the next connection, and the files it was
+      -- given have to be sent again.
       self.active_session_ids = {}
+      self.sent_files = {}
 
       -- Handle auto-reconnect
       if self.config.reconnect and self.reconnect_count < (self.config.max_reconnect_attempts or 3) then
@@ -1465,6 +1468,7 @@ function ACPClient:stop()
   self.permission_queue = {}
   self.active_permission_id = nil
   self.active_session_ids = {}
+  self.sent_files = {}
   self:release_all_terminals()
   -- Tell the exit handler this was requested so it fails pending callbacks quietly
   self._stopping = true

@@ -1827,8 +1827,13 @@ function Sidebar:initialize()
     local filepath = Utils.file.is_in_project(buf_path) and Utils.relative_path(buf_path) or buf_path
     Utils.debug("Sidebar:initialize adding buffer to file selector", buf_path)
 
-    local stat = vim.uv.fs_stat(filepath)
-    if stat == nil or stat.type == "file" then self.file_selector:add_selected_file(filepath) end
+    -- Directory buffers (oil.nvim's `oil://` URLs, netrw, `nvim .`) fail the
+    -- stat below, and add_selected_file() would then pull the whole project
+    -- into the selection; "current file" never means that.
+    local candidate = Utils.to_absolute_path((filepath:gsub("^oil:", "")))
+    local stat = vim.uv.fs_stat(candidate)
+    local is_dir = (stat ~= nil and stat.type == "directory") or vim.fn.isdirectory(candidate) == 1
+    if not is_dir and (stat == nil or stat.type == "file") then self.file_selector:add_selected_file(filepath) end
   end
 
   self:reload_chat_history()

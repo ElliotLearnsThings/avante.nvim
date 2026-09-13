@@ -2212,18 +2212,93 @@ function M.build_acp_file_part(filepath, acp_client)
   return acp_client:create_resource_link_content(uri, file_name, nil, mime_type)
 end
 
+---Warn when a single prompt embeds more selected files than this.
+M.ACP_SELECTED_FILES_WARN_COUNT = 30
+---Warn when a single prompt embeds more than this many bytes of selected files.
+M.ACP_SELECTED_FILES_WARN_BYTES = 300 * 1024
+
+---Files already handed to the agent in a session, keyed by absolute path and
+---holding a fingerprint of the content that was sent.
+---@param acp_client avante.acp.ACPClient
+---@param session_id string
+---@return table<string, string>
+local function get_sent_files(acp_client, session_id)
+  acp_client.sent_files = acp_client.sent_files or {}
+  local sent = acp_client.sent_files[session_id]
+  if not sent then
+    sent = {}
+    acp_client.sent_files[session_id] = sent
+  end
+  return sent
+end
+
+---@param part table an ACP `resource` or `resource_link` prompt part
+---@return string fingerprint
+---@return integer bytes embedded content size (0 for links)
+local function file_part_fingerprint(part)
+  if part.type == "resource" and type(part.resource) == "table" and type(part.resource.text) == "string" then
+    return "resource:" .. vim.fn.sha256(part.resource.text), #part.resource.text
+  end
+  return "link", 0
+end
+
+---Build prompt parts for the selected files the agent has not seen yet in
+---this session. The agent keeps the conversation, and every file it was
+---given, in its own context: re-sending an unchanged selection on every turn
+---only burns that context and forces an early compaction. A file is sent
+---again only when its content changed. Returns the parts plus a function that
+---records them as sent, to be called once the prompt has gone out.
+---@param filepaths string[]|nil
+---@param acp_client avante.acp.ACPClient
+---@param session_id string
+---@return table[] parts
+---@return fun() mark_sent
+function M.build_acp_selected_file_parts(filepaths, acp_client, session_id)
+  local parts = {}
+  if not filepaths or #filepaths == 0 then return parts, function() end end
+  local sent = get_sent_files(acp_client, session_id)
+  local pending = {}
+  local total_bytes = 0
+  for _, filepath in ipairs(filepaths) do
+    local abs_path = Utils.to_absolute_path(filepath)
+    local part = M.build_acp_file_part(filepath, acp_client)
+    local fingerprint, bytes = file_part_fingerprint(part)
+    if sent[abs_path] ~= fingerprint then
+      table.insert(parts, part)
+      pending[abs_path] = fingerprint
+      total_bytes = total_bytes + bytes
+    end
+  end
+  if #parts > M.ACP_SELECTED_FILES_WARN_COUNT or total_bytes > M.ACP_SELECTED_FILES_WARN_BYTES then
+    Utils.warn(
+      string.format(
+        "Sending %d selected files (%d KB) to the agent; this fills its context and can force it to compact. "
+          .. "If that was not intended, remove files from the Selected Files pane (%s).",
+        #parts,
+        math.floor(total_bytes / 1024),
+        Config.mappings.sidebar.remove_file
+      ),
+      { title = "Avante" }
+    )
+  end
+  return parts, function()
+    for abs_path, fingerprint in pairs(pending) do
+      sent[abs_path] = fingerprint
+    end
+  end
+end
+
 ---@param opts AvanteLLMStreamOptions
 ---@param acp_client avante.acp.ACPClient
 ---@param session_id string
 function M._continue_stream_acp(opts, acp_client, session_id)
   local prompt = {}
+  local mark_files_sent = function() end
   local donot_use_builtin_system_prompt = opts.history_messages ~= nil and #opts.history_messages > 0
   if donot_use_builtin_system_prompt then
-    if opts.selected_filepaths then
-      for _, filepath in ipairs(opts.selected_filepaths) do
-        table.insert(prompt, M.build_acp_file_part(filepath, acp_client))
-      end
-    end
+    local file_parts
+    file_parts, mark_files_sent = M.build_acp_selected_file_parts(opts.selected_filepaths, acp_client, session_id)
+    vim.list_extend(prompt, file_parts)
     if opts.selected_code then
       local prompt_item = {
         type = "text",
@@ -2591,10 +2666,11 @@ function M._continue_stream_acp(opts, acp_client, session_id)
     finalize(on_stop_reason == "cancelled" and "cancelled" or "complete")
     opts.on_stop({ reason = on_stop_reason, acp_stop_reason = stop_reason })
   end)
-  -- From here on the agent owns these messages; never send them again.
+  -- From here on the agent owns these messages and files; never send them again.
   for _, message in ipairs(rawget(opts, "_acp_pending_messages") or {}) do
     message.acp_sent = true
   end
+  mark_files_sent()
 end
 
 ---Map an ACP `session/prompt` stopReason to a user-facing notice and an on_stop reason.

@@ -738,6 +738,48 @@ describe("ACP prompt: only unsent user messages are forwarded", function()
     }, texts)
   end)
 
+  it("sends each selected file once per session and again only when it changed", function()
+    local client, sent = make_client()
+    client.agent_capabilities.promptCapabilities = { embeddedContext = true }
+    client.prompt_capabilities = { embeddedContext = true }
+    local tmp_dir = vim.fn.tempname()
+    vim.fn.mkdir(tmp_dir, "p")
+    local path = tmp_dir .. "/mod.lua"
+    local function write(content)
+      local file = assert(io.open(path, "wb"))
+      file:write(content)
+      file:close()
+    end
+    write("return 1\n")
+
+    local function turn(text, session_id)
+      local message = History.Message:new("user", text, { is_user_submission = true })
+      llm._continue_stream_acp({
+        acp_session_id = session_id,
+        selected_filepaths = { path },
+        history_messages = { message },
+        on_start = function() end,
+        on_stop = function() end,
+      }, client, session_id)
+      return vim.tbl_map(function(p) return p.type end, sent())
+    end
+
+    assert.same({ "resource", "text" }, turn("first", "session-4"))
+    -- the same selection on the next turn is not repeated
+    assert.same({ "text" }, turn("second", "session-4"))
+    -- a changed file is sent again
+    write("return 2\n")
+    assert.same({ "resource", "text" }, turn("third", "session-4"))
+    assert.equals("return 2\n", sent()[1].resource.text)
+    -- another session on the same agent process knows nothing yet
+    assert.same({ "resource", "text" }, turn("fourth", "session-5"))
+    -- a restarted agent process forgets everything
+    client:stop()
+    client.state = "ready"
+    assert.same({ "resource", "text" }, turn("fifth", "session-4"))
+    vim.fn.delete(tmp_dir, "rf")
+  end)
+
   it("falls back to the last user message when nothing is pending", function()
     local client, sent = make_client()
     local only = History.Message:new("user", "retry me", { is_user_submission = true })
