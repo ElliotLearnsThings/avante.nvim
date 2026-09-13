@@ -378,7 +378,9 @@ describe("ACP prompt parts", function()
 
       llm._continue_stream_acp({
         selected_filepaths = { lua_file },
-        history_messages = { { message = { role = "user", content = "hi\nimage: " .. png } } },
+        history_messages = {
+          require("avante.history").Message:new("user", "hi\nimage: " .. png, { is_user_submission = true }),
+        },
         on_start = function() end,
         on_stop = function() end,
       }, client, "session-1")
@@ -780,17 +782,40 @@ describe("ACP prompt: only unsent user messages are forwarded", function()
     vim.fn.delete(tmp_dir, "rf")
   end)
 
-  it("falls back to the last user message when nothing is pending", function()
+  it("never replays an already sent message when nothing is pending", function()
     local client, sent = make_client()
-    local only = History.Message:new("user", "retry me", { is_user_submission = true })
+    local warn_stub = stub(require("avante.utils"), "warn")
+    local only = History.Message:new("user", "commit and push", { is_user_submission = true })
     only.acp_sent = true
+    local stopped
     llm._continue_stream_acp({
       acp_session_id = "session-3",
-      history_messages = { only },
+      history_messages = { only, History.Message:new("assistant", "done") },
+      on_start = function() end,
+      on_stop = function(stop_opts) stopped = stop_opts end,
+    }, client, "session-3")
+    warn_stub:revert()
+    assert.is_nil(sent())
+    assert.same({ reason = "complete" }, stopped)
+    assert.stub(warn_stub).was_called(1)
+  end)
+
+  it("sends an unsent submission even when it did not land at the tail of the history", function()
+    local client, sent = make_client()
+    -- A uuid collision used to overwrite an old slot with the new submission,
+    -- leaving assistant messages after it.
+    local misplaced = History.Message:new("user", "/autocompact 500000", { is_user_submission = true })
+    local old = History.Message:new("user", "old question", { is_user_submission = true })
+    old.acp_sent = true
+    llm._continue_stream_acp({
+      acp_session_id = "session-6",
+      history_messages = { misplaced, old, History.Message:new("assistant", "old answer") },
       on_start = function() end,
       on_stop = function() end,
-    }, client, "session-3")
-    assert.equals("retry me", sent()[1].text)
+    }, client, "session-6")
+    assert.equals(1, #sent())
+    assert.equals("/autocompact 500000", sent()[1].text)
+    assert.is_true(misplaced.acp_sent)
   end)
 end)
 

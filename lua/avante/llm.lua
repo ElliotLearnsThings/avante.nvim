@@ -2422,13 +2422,25 @@ function M._continue_stream_acp(opts, acp_client, session_id)
     -- turns makes agents such as Claude Code answer old questions again.
     local pending = M._get_unsent_acp_user_messages(history_messages)
     if #pending == 0 then
-      -- Nothing new (e.g. a retry after an error): resend the last user message
+      -- The new submission is not at the tail (it landed elsewhere in the
+      -- history): take the newest unsent one from anywhere instead.
       for i = #history_messages, 1, -1 do
-        if history_messages[i].message.role == "user" then
-          pending = { history_messages[i] }
+        local message = history_messages[i]
+        if message.message.role == "user" and message.is_user_submission and not message.acp_sent then
+          pending = { message }
           break
         end
       end
+    end
+    if #pending == 0 then
+      -- Never replay a message the agent already has: that re-runs the
+      -- previous request (e.g. "commit and push") instead of the new one.
+      Utils.warn(
+        "Nothing new to send: every message in this chat has already been given to the agent.",
+        { title = "Avante" }
+      )
+      opts.on_stop({ reason = "complete" })
+      return
     end
     local pending_uuids = {}
     for _, message in ipairs(pending) do

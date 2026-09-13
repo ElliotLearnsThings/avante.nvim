@@ -1581,7 +1581,33 @@ end
 
 function M.get_timestamp() return tostring(os.date("%Y-%m-%d %H:%M:%S")) end
 
+-- LuaJIT starts every Neovim process with the same math.random() sequence.
+-- Ids derived from it therefore repeat across restarts: the first messages
+-- created after a restart got the uuids of the first messages of the
+-- reopened chat and silently replaced them (see Sidebar:add_history_messages).
+-- Seed once, and take uuids from the OS entropy pool when libuv offers it.
+math.randomseed(vim.uv.hrtime() % 0x7fffffff + vim.uv.getpid() * 65537 + os.time())
+
+---@return string|nil 16 random bytes, nil when uv.random is unavailable
+local function random_bytes16()
+  if type(vim.uv.random) ~= "function" then return nil end
+  local ok, bytes = pcall(vim.uv.random, 16)
+  if ok and type(bytes) == "string" and #bytes == 16 then return bytes end
+  return nil
+end
+
+---RFC 4122 version 4 uuid. Never reuses a value across Neovim sessions.
 function M.uuid()
+  local bytes = random_bytes16()
+  if bytes then
+    local b = { bytes:byte(1, 16) }
+    b[7] = bit.bor(bit.band(b[7], 0x0f), 0x40)
+    b[9] = bit.bor(bit.band(b[9], 0x3f), 0x80)
+    return string.format(
+      "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+      unpack(b)
+    )
+  end
   local template = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
   return string.gsub(template, "[xy]", function(c)
     local v = (c == "x") and math.random(0, 0xf) or math.random(8, 0xb)

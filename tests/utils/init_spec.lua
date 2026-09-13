@@ -238,4 +238,28 @@ describe("Utils", function()
       assert.equals(3, end_line)
     end)
   end)
+
+  describe("uuid", function()
+    it("produces RFC 4122 v4 ids", function()
+      local hex = "%x"
+      local pattern = "^" .. hex:rep(8) .. "%-" .. hex:rep(4) .. "%-4" .. hex:rep(3) .. "%-[89ab]" .. hex:rep(3)
+        .. "%-" .. hex:rep(12) .. "$"
+      assert.truthy(Utils.uuid():match(pattern))
+    end)
+
+    it("does not repeat and does not follow the deterministic math.random sequence", function()
+      local seen = {}
+      for _ = 1, 2000 do
+        local id = Utils.uuid()
+        assert.is_nil(seen[id], "duplicate uuid " .. id)
+        seen[id] = true
+      end
+      -- LuaJIT seeds math.random identically in every process; ids must not
+      -- be reproducible by resetting that sequence.
+      math.randomseed(1)
+      local first = Utils.uuid()
+      math.randomseed(1)
+      assert.not_equals(first, Utils.uuid())
+    end)
+  end)
 end)
