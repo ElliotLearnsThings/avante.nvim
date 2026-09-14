@@ -906,3 +906,177 @@ describe("ACP turn end finalizes dangling tool calls", function()
     client:stop()
   end)
 end)
+
+describe("acp follow target line", function()
+  local function make_buf(lines)
+    local bufnr = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+    return bufnr
+  end
+
+  local lines = {
+    "local function alpha()",
+    "  return 1",
+    "end",
+    "",
+    "local function beta()",
+    "  return 2",
+    "end",
+  }
+
+  it("honours an explicit line when the adapter sends one", function()
+    local bufnr = make_buf(lines)
+    local got = llm._acp_follow_target_line({}, { path = "/tmp/x.lua", line = 5 }, bufnr)
+    assert.equals(5, got)
+  end)
+
+  it("finds the edited region from the diff content item", function()
+    local bufnr = make_buf(lines)
+    local upd = {
+      content = {
+        { type = "diff", path = "/tmp/x.lua", oldText = "local function beta()", newText = "local function gamma()" },
+      },
+    }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(5, got)
+  end)
+
+  it("finds the edited region from snake_case rawInput", function()
+    local bufnr = make_buf(lines)
+    local upd = { rawInput = { file_path = "/tmp/x.lua", old_string = "  return 2", new_string = "  return 3" } }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(6, got)
+  end)
+
+  it("matches a multi-line old_string at its first line", function()
+    local bufnr = make_buf(lines)
+    local upd = { rawInput = { old_string = "local function beta()\n  return 2\nend" } }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(5, got)
+  end)
+
+  it("does not match a multi-line needle whose later lines differ", function()
+    local bufnr = make_buf(lines)
+    local upd = { rawInput = { old_string = "local function beta()\n  return 99" } }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(1, got)
+  end)
+
+  it("falls back to the Read offset when there is no edit payload", function()
+    local bufnr = make_buf(lines)
+    local upd = { rawInput = { offset = 4 } }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(4, got)
+  end)
+
+  it("falls back to line 1 when nothing matches", function()
+    local bufnr = make_buf(lines)
+    local upd = { rawInput = { old_string = "nowhere in this buffer" } }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(1, got)
+  end)
+
+  it("ignores a diff item that belongs to a different file", function()
+    local bufnr = make_buf(lines)
+    local upd = {
+      content = { { type = "diff", path = "/tmp/other.lua", oldText = "local function beta()", newText = "x" } },
+      rawInput = { offset = 3 },
+    }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(3, got)
+  end)
+
+  it("falls back to the new text when the old text is gone (buffer reloaded after a removal)", function()
+    local bufnr = make_buf(lines)
+    -- old_string had a "test" line that the edit removed; the buffer now holds new_string.
+    local upd = {
+      status = "completed",
+      rawInput = {
+        old_string = "local function beta()\ntest\n  return 2",
+        new_string = "local function beta()\n  return 2",
+      },
+    }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(5, got)
+  end)
+
+  it("prefers the old text when both are present (edit not applied yet)", function()
+    local bufnr = make_buf(lines)
+    local upd = { rawInput = { old_string = "  return 2", new_string = "  return 1" } }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(6, got)
+  end)
+
+  it("ignores vim.NIL and empty oldText (a Write creating a new file)", function()
+    local bufnr = make_buf(lines)
+    local upd = {
+      content = { { type = "diff", path = "/tmp/x.lua", oldText = vim.NIL, newText = "whatever" } },
+    }
+    local got = llm._acp_follow_target_line(upd, { path = "/tmp/x.lua" }, bufnr)
+    assert.equals(1, got)
+  end)
+end)
+
+describe("ACP edit completion reloads buffers the agent wrote to disk", function()
+  local api = vim.api
+  local tmp_dir
+
+  local function write_disk(path, content)
+    local file = assert(io.open(path, "wb"))
+    file:write(content)
+    file:close()
+  end
+
+  before_each(function()
+    tmp_dir = vim.fn.tempname()
+    vim.fn.mkdir(tmp_dir, "p")
+    vim.o.swapfile = false
+  end)
+
+  after_each(function()
+    for _, bufnr in ipairs(api.nvim_list_bufs()) do
+      if api.nvim_buf_get_name(bufnr):find(tmp_dir, 1, true) then
+        pcall(api.nvim_buf_delete, bufnr, { force = true })
+      end
+    end
+    vim.fn.delete(tmp_dir, "rf")
+  end)
+
+  local function open_file(path)
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    return api.nvim_get_current_buf()
+  end
+
+  it("picks up the new content of an unmodified buffer", function()
+    local path = tmp_dir .. "/a.md"
+    write_disk(path, "one\ntwo\n")
+    local bufnr = open_file(path)
+    vim.uv.sleep(20) -- distinct mtime from the first write
+    write_disk(path, "one\ntest\ntwo\n")
+    local reloaded = llm._reload_acp_edit_buffers({ kind = "edit", locations = { { path = path } } })
+    assert.same({ path }, reloaded)
+    assert.same({ "one", "test", "two" }, api.nvim_buf_get_lines(bufnr, 0, -1, false))
+    assert.is_false(vim.bo[bufnr].modified)
+  end)
+
+  it("leaves a buffer with unsaved changes alone", function()
+    local path = tmp_dir .. "/b.md"
+    write_disk(path, "one\ntwo\n")
+    local bufnr = open_file(path)
+    api.nvim_buf_set_lines(bufnr, 0, 1, false, { "mine" })
+    vim.uv.sleep(20)
+    write_disk(path, "one\ntest\ntwo\n")
+    local reloaded = llm._reload_acp_edit_buffers({ kind = "edit", locations = { { path = path } } })
+    assert.same({}, reloaded)
+    assert.same({ "mine", "two" }, api.nvim_buf_get_lines(bufnr, 0, -1, false))
+    assert.is_true(vim.bo[bufnr].modified)
+  end)
+
+  it("does nothing for non-edit calls or files that are not open", function()
+    local path = tmp_dir .. "/c.md"
+    write_disk(path, "one\n")
+    assert.same({}, llm._reload_acp_edit_buffers({ kind = "read", locations = { { path = path } } }))
+    assert.same({}, llm._reload_acp_edit_buffers({ kind = "edit", locations = { { path = path } } }))
+    assert.same({}, llm._reload_acp_edit_buffers({ kind = "edit" }))
+  end)
+end)

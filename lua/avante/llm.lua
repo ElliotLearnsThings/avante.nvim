@@ -947,6 +947,136 @@ local function find_loaded_file_buffer(abs_path)
   return nil
 end
 
+---Text an edit tool call replaces and the text it puts there, when the
+---update carries them. claude-agent-acp sends the raw Claude Code input
+---(snake_case) alongside a `diff` content item it builds itself (camelCase),
+---so check both.
+---@param upd table ACP tool_call / tool_call_update
+---@param abs_path string file the location points at
+---@return string|nil old_text
+---@return string|nil new_text
+local function acp_edit_texts(upd, abs_path)
+  local function usable(text)
+    if type(text) ~= "string" or text == "" or text == vim.NIL then return nil end
+    return text
+  end
+
+  if type(upd.content) == "table" then
+    for _, item in ipairs(upd.content) do
+      if type(item) == "table" and item.type == "diff" then
+        local same_file = type(item.path) ~= "string" or canonical_path(item.path) == canonical_path(abs_path)
+        if same_file and (usable(item.oldText) or usable(item.newText)) then
+          return usable(item.oldText), usable(item.newText)
+        end
+      end
+    end
+  end
+
+  local raw = type(upd.rawInput) == "table" and upd.rawInput or nil
+  if raw then
+    return usable(raw.old_string) or usable(raw.oldString), usable(raw.new_string) or usable(raw.newString)
+  end
+  return nil, nil
+end
+
+---First line of `needle` inside `bufnr`, matching literally.
+---Multi-line needles must match on consecutive lines from the anchor.
+---@param bufnr integer
+---@param needle string
+---@return integer|nil lnum 1-indexed
+local function buffer_line_of_text(bufnr, needle)
+  local needle_lines = vim.split(needle, "\n", { plain = true })
+  -- A trailing newline yields an empty final element that matches anything.
+  while #needle_lines > 1 and needle_lines[#needle_lines] == "" do
+    table.remove(needle_lines)
+  end
+  local anchor = needle_lines[1]
+  if not anchor or anchor == "" then return nil end
+
+  local buf_lines = api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  for i = 1, #buf_lines - #needle_lines + 1 do
+    if buf_lines[i] == anchor then
+      local matched = true
+      for j = 2, #needle_lines do
+        if buf_lines[i + j - 1] ~= needle_lines[j] then
+          matched = false
+          break
+        end
+      end
+      if matched then return i end
+    end
+  end
+  return nil
+end
+
+---Line an edit update wants the user to look at, best effort.
+---The shim emits `locations: [{ path }]` with no line for Edit/Write, so
+---without this every follow lands on line 1 of the file.
+---@param upd table
+---@param location table
+---@param bufnr integer
+---@return integer lnum 1-indexed
+local function acp_follow_target_line(upd, location, bufnr)
+  if type(location.line) == "number" and location.line > 0 then return location.line end
+
+  local abs_path = Utils.is_absolute_path(location.path) and location.path
+    or vim.fs.joinpath(Utils.get_project_root(), location.path)
+
+  -- Before the edit lands the old text is in the buffer; once the buffer has
+  -- been reloaded after the edit only the new text is (e.g. a removed line).
+  local old_text, new_text = acp_edit_texts(upd, abs_path)
+  for _, needle in ipairs({ old_text or false, new_text or false }) do
+    if needle then
+      local lnum = buffer_line_of_text(bufnr, needle)
+      if lnum then return lnum end
+    end
+  end
+
+  local raw = type(upd.rawInput) == "table" and upd.rawInput or nil
+  if raw and type(raw.offset) == "number" and raw.offset > 0 then return raw.offset end
+
+  return 1
+end
+
+---Re-read a buffer from disk after the agent wrote the file itself.
+---claude-agent-acp runs Claude Code's native Read/Edit/Write, which touch the
+---disk directly; Neovim only notices on the next buffer enter, so the window
+---kept showing the previous state. Buffers with unsaved changes are left
+---alone: overwriting them would lose the user's work.
+---@param abs_path string
+---@return boolean reloaded
+local function reload_buffer_from_disk(abs_path)
+  local bufnr = find_loaded_file_buffer(abs_path)
+  if not bufnr or vim.bo[bufnr].modified then return false end
+  local ok = pcall(api.nvim_buf_call, bufnr, function()
+    -- `autoread` is global-local: force it for this check only so a user
+    -- who disabled it never gets the "file changed on disk" prompt here.
+    vim.cmd("silent! setlocal autoread")
+    vim.cmd("silent! checktime " .. bufnr)
+    vim.cmd("silent! setlocal autoread<")
+  end)
+  return ok
+end
+
+---Reload every file an edit tool call touched, once the call has completed.
+---@param upd table merged ACP tool call
+---@return string[] reloaded absolute paths
+function M._reload_acp_edit_buffers(upd)
+  local reloaded = {}
+  if upd.kind ~= "edit" or type(upd.locations) ~= "table" then return reloaded end
+  for _, location in ipairs(upd.locations) do
+    if type(location) == "table" and type(location.path) == "string" then
+      local abs_path = Utils.is_absolute_path(location.path) and location.path
+        or vim.fs.joinpath(Utils.get_project_root(), location.path)
+      if reload_buffer_from_disk(abs_path) then table.insert(reloaded, abs_path) end
+    end
+  end
+  return reloaded
+end
+
+-- Exposed for tests: line derivation is pure and worth pinning down.
+M._acp_follow_target_line = acp_follow_target_line
+
 ---Replace the content of a buffer with `lines`, touching only the changed
 ---region so marks, folds, extmarks and the cursor outside of it survive and
 ---the edit lands as a single undo step.
@@ -1596,9 +1726,9 @@ function M._stream_acp(opts)
           local ok = pcall(api.nvim_win_set_buf, code_winid, bufnr)
           if not ok then return end
 
-          local line = location.line or 1
+          local line = acp_follow_target_line(upd, location, bufnr)
           local line_count = api.nvim_buf_line_count(bufnr)
-          local target_line = math.min(line, line_count)
+          local target_line = math.max(1, math.min(line, line_count))
 
           pcall(api.nvim_win_set_cursor, code_winid, { target_line, 0 })
           pcall(api.nvim_win_call, code_winid, function() vim.cmd("normal! zz") end)
@@ -1616,13 +1746,16 @@ function M._stream_acp(opts)
       if update.sessionUpdate == "tool_call_update" then
         -- Also try follow here: some ACP adapters (e.g. claude-agent-acp)
         -- send locations in tool_call_update rather than the initial tool_call
-        local merged = tool_call_messages[update.toolCallId]
+        local cached = tool_call_messages[update.toolCallId]
           and tool_call_messages[update.toolCallId].acp_tool_call
-        if merged then
-          try_follow_agent_location(vim.tbl_deep_extend("force", merged, update))
-        else
-          try_follow_agent_location(update)
+        local merged = cached and vim.tbl_deep_extend("force", cached, update) or update
+        if update.status == "completed" and merged.kind == "edit" then
+          -- The agent has written the file: pick the new content up before the
+          -- follow below, so the window shows this edit and not the previous one.
+          -- Scheduled ahead of the follow's own schedule (FIFO), so it runs first.
+          vim.schedule(function() M._reload_acp_edit_buffers(merged) end)
         end
+        try_follow_agent_location(merged)
         local tool_call_message = tool_call_messages[update.toolCallId]
         if not tool_call_message then
           tool_call_message = History.Message:new("assistant", {
